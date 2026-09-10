@@ -448,13 +448,25 @@ public partial class MainWindow : Window
             switch (action.Type)
             {
                 case FluxActionType.Launch:
-                    Process.Start(new ProcessStartInfo(action.Target) { UseShellExecute = true });
+                    using (var launched = Process.Start(new ProcessStartInfo(action.Target) { UseShellExecute = true }))
+                    {
+                        if (launched is null)
+                        {
+                            throw new InvalidOperationException($"Windows could not open {action.DisplayName ?? action.Target}.");
+                        }
+                    }
                     _settings.ApplicationUsage[action.Target] = _settings.ApplicationUsage.GetValueOrDefault(action.Target) + 1;
                     _settingsService.Save();
                     HideLauncher();
                     break;
                 case FluxActionType.OpenPath:
-                    Process.Start(new ProcessStartInfo(action.Target) { UseShellExecute = true });
+                    using (var launched = Process.Start(new ProcessStartInfo(action.Target) { UseShellExecute = true }))
+                    {
+                        if (launched is null)
+                        {
+                            throw new InvalidOperationException("Windows did not open the selected path.");
+                        }
+                    }
                     HideLauncher();
                     break;
                 case FluxActionType.CreateFolder:
@@ -569,10 +581,24 @@ public partial class MainWindow : Window
         }
 
         var result = await _processes.TerminateAsync(match.Process.Id);
-        if (result.Success && executable is not null)
+        if (result.Success && executable is null)
         {
-            Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
-            result = result with { Output = result.Output + " Restarted it." };
+            result = result with
+            {
+                Success = false,
+                Output = result.Output + Environment.NewLine + "Couldn't restart: executable path unavailable"
+            };
+        }
+        else if (result.Success)
+        {
+            using var restarted = Process.Start(new ProcessStartInfo(executable!) { UseShellExecute = true });
+            result = restarted is null
+                ? result with
+                {
+                    Success = false,
+                    Output = result.Output + Environment.NewLine + "Couldn't restart: Windows started no process"
+                }
+                : result with { Output = result.Output + Environment.NewLine + "Restarted: " + match.Process.FriendlyName };
         }
         ShowToolResults([result]);
     }

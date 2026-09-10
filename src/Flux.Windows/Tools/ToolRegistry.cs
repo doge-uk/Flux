@@ -283,14 +283,24 @@ public sealed class ToolRegistry : IToolRegistry
 
         public Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var path = call.Arguments.GetProperty("path").GetString() ?? string.Empty;
             if (!File.Exists(path) && !Directory.Exists(path))
             {
                 return Task.FromResult(new ToolResult(call.Id, Definition.Name, false, "Path does not exist."));
             }
 
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-            return Task.FromResult(new ToolResult(call.Id, Definition.Name, true, $"Opened {path}."));
+            try
+            {
+                using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+                return Task.FromResult(process is null
+                    ? new ToolResult(call.Id, Definition.Name, false, $"Couldn't open: {path}")
+                    : new ToolResult(call.Id, Definition.Name, true, $"Opened: {path}"));
+            }
+            catch
+            {
+                return Task.FromResult(new ToolResult(call.Id, Definition.Name, false, $"Couldn't open: {path}"));
+            }
         }
     }
 
