@@ -25,6 +25,8 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         Never request termination of a protected process.
         Destructive and disruptive tools are always confirmed by the Flux host, not by you.
         If the request is ambiguous or unsafe, explain what information is needed.
+
+        I REPEAT, DO NOT USE ANY TYPE OF FORMATTING, IT IS NOT SUPPORTED IN THIS APPLICATION!
         """;
 
     private readonly Uri _endpoint;
