@@ -27,6 +27,14 @@ if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
         }
     };
     await provider.BeginLocalModelSessionAsync();
+    await Task.Delay(TimeSpan.FromSeconds(35));
+    using (var ollama = new HttpClient())
+    {
+        var running = JsonNode.Parse(await ollama.GetStringAsync("http://localhost:11434/api/ps"));
+        var stillResident = running?["models"]?.AsArray().Any(item =>
+            string.Equals(item?["name"]?.GetValue<string>(), requestedModel, StringComparison.OrdinalIgnoreCase)) == true;
+        Assert(stillResident, "The model left memory while the search UI session was still open.");
+    }
     provider.ScheduleLocalModelUnload(TimeSpan.FromSeconds(1));
     await unloaded.Task.WaitAsync(TimeSpan.FromSeconds(15));
     Assert(stages.Contains(AiModelStage.Loading) && stages.Contains(AiModelStage.Ready) && stages.Contains(AiModelStage.Unloaded),

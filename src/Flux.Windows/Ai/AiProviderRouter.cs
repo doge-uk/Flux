@@ -42,6 +42,7 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
     private readonly object _unloadGate = new();
     private CancellationTokenSource? _unloadCancellation;
     private int _activeRequests;
+    private int _localSessionOpen;
 
     public event Action<AiModelStatus>? ModelStatusChanged;
 
@@ -82,12 +83,14 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
 
     public Task BeginLocalModelSessionAsync(CancellationToken cancellationToken = default)
     {
+        Interlocked.Exchange(ref _localSessionOpen, 1);
         CancelScheduledUnload();
         return WarmUpFastModelAsync(cancellationToken);
     }
 
     public void ScheduleLocalModelUnload(TimeSpan delay)
     {
+        Interlocked.Exchange(ref _localSessionOpen, 0);
         CancelScheduledUnload();
         if (settings.AiMode is AiMode.Disabled or AiMode.Cloud || !HasFastLocalConfiguration)
         {
@@ -115,7 +118,29 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
         }
         finally
         {
-            Interlocked.Decrement(ref _activeRequests);
+            if (Interlocked.Decrement(ref _activeRequests) == 0 && Volatile.Read(ref _localSessionOpen) == 1)
+            {
+                _ = KeepLocalModelsResidentAsync();
+            }
+        }
+    }
+
+    private async Task KeepLocalModelsResidentAsync()
+    {
+        try
+        {
+            var localProviders = _providers.Values
+                .Where(provider => provider.IsOllama)
+                .Distinct()
+                .ToArray();
+            foreach (var provider in localProviders)
+            {
+                await provider.WarmUpAsync();
+            }
+        }
+        catch
+        {
+            // The next real request will report a useful provider error if Ollama stopped.
         }
     }
 
@@ -336,7 +361,19 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
 
     public void Dispose()
     {
+        Interlocked.Exchange(ref _localSessionOpen, 0);
         CancelScheduledUnload();
+        using var unloadTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        foreach (var provider in _providers.Values.Where(provider => provider.IsOllama).Distinct())
+        {
+            try
+            {
+                provider.UnloadAsync(unloadTimeout.Token).GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
+        }
         foreach (var provider in _providers.Values)
         {
             provider.Dispose();

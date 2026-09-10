@@ -59,7 +59,7 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
     {
         if (_ollamaGenerateEndpoint is not null)
         {
-            await SendOllamaLifecycleRequestAsync(JsonValue.Create("30s")!, cancellationToken);
+            await SendOllamaLifecycleRequestAsync(JsonValue.Create(-1)!, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -76,10 +76,10 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         {
             Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
         };
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             throw new InvalidOperationException($"{Name} warmup returned {(int)response.StatusCode}: {ReadError(errorBody)}");
         }
     }
@@ -94,6 +94,7 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         var payload = new JsonObject
         {
             ["model"] = _model,
+            ["prompt"] = string.Empty,
             ["stream"] = false,
             ["keep_alive"] = keepAlive
         };
@@ -101,10 +102,10 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         {
             Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
         };
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             throw new InvalidOperationException($"Ollama returned {(int)response.StatusCode}: {ReadError(errorBody)}");
         }
     }
