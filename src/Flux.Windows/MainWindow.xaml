@@ -115,6 +115,9 @@
             </Grid>
         </Border>
 
+        <Canvas x:Name="ParticleCanvas" Grid.RowSpan="3" Panel.ZIndex="5"
+                IsHitTestVisible="False" ClipToBounds="False" />
+
         <Border x:Name="ResultsSurface" Grid.Row="2" Margin="8,0,8,8"
                 Background="#E8000000" BorderBrush="#24FFFFFF" BorderThickness="1"
                 CornerRadius="24" Visibility="Collapsed" RenderTransformOrigin="0.5,0">

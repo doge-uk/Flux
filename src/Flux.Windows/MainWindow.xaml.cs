@@ -4,9 +4,12 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using Flux.Core;
 using Flux.Core.Agent;
@@ -73,7 +76,7 @@ public partial class MainWindow : Window
         ResultsList.ItemsSource = _results;
         _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
         _searchTimer.Tick += SearchTimer_Tick;
-        _hotkey.Pressed += (_, _) => Dispatcher.Invoke(ShowLauncher);
+        _hotkey.Pressed += (_, _) => Dispatcher.Invoke(ToggleLauncher);
     }
 
     public event EventHandler? HotkeyRegistrationFailed;
@@ -116,6 +119,17 @@ public partial class MainWindow : Window
         QueryBox.Focus();
         Keyboard.Focus(QueryBox);
         AnimateLauncherOpen();
+    }
+
+    private void ToggleLauncher()
+    {
+        if (IsVisible && !_isHiding)
+        {
+            HideLauncher();
+            return;
+        }
+
+        ShowLauncher();
     }
 
     public void ShowSettings()
@@ -663,6 +677,79 @@ public partial class MainWindow : Window
             new DoubleAnimation(0.975, 1, TimeSpan.FromMilliseconds(155)) { EasingFunction = easing });
         LauncherTranslate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
             new DoubleAnimation(-7, 0, TimeSpan.FromMilliseconds(155)) { EasingFunction = easing });
+        SearchPill.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0.58, 1, TimeSpan.FromMilliseconds(210)) { EasingFunction = easing });
+        BeginParticleBuild();
+    }
+
+    private void BeginParticleBuild()
+    {
+        ParticleCanvas.Children.Clear();
+        var random = Random.Shared;
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var width = ActualWidth > 0 ? ActualWidth : Width;
+        const double top = 9;
+        const double bottom = 94;
+        const double left = 10;
+        var right = Math.Max(left + 1, width - 10);
+        const int particleCount = 34;
+
+        for (var index = 0; index < particleCount; index++)
+        {
+            var horizontalEdge = random.NextDouble() < 0.76;
+            var targetX = horizontalEdge
+                ? left + random.NextDouble() * (right - left)
+                : random.NextDouble() < 0.5 ? left : right;
+            var targetY = horizontalEdge
+                ? random.NextDouble() < 0.5 ? top : bottom
+                : top + random.NextDouble() * (bottom - top);
+            var fromCentreX = targetX - width / 2;
+            var fromCentreY = targetY - (top + bottom) / 2;
+            var distance = 18 + random.NextDouble() * 42;
+            var length = Math.Max(1, Math.Sqrt(fromCentreX * fromCentreX + fromCentreY * fromCentreY));
+            var startOffsetX = fromCentreX / length * distance + (random.NextDouble() - 0.5) * 18;
+            var startOffsetY = fromCentreY / length * distance + (random.NextDouble() - 0.5) * 18;
+            var size = 1.5 + random.NextDouble() * 2.7;
+            var particle = new Ellipse
+            {
+                Width = size,
+                Height = size,
+                Fill = new SolidColorBrush(index % 5 == 0
+                    ? System.Windows.Media.Color.FromRgb(156, 145, 255)
+                    : index % 7 == 0 ? System.Windows.Media.Color.FromRgb(111, 94, 249) : Colors.White),
+                Opacity = 0,
+                IsHitTestVisible = false,
+                RenderTransformOrigin = new System.Windows.Point(0.5, 0.5)
+            };
+            var transform = new TransformGroup();
+            var scale = new ScaleTransform(0.35, 0.35);
+            var translate = new TranslateTransform(startOffsetX, startOffsetY);
+            transform.Children.Add(scale);
+            transform.Children.Add(translate);
+            particle.RenderTransform = transform;
+            Canvas.SetLeft(particle, targetX - size / 2);
+            Canvas.SetTop(particle, targetY - size / 2);
+            ParticleCanvas.Children.Add(particle);
+
+            var delay = TimeSpan.FromMilliseconds(random.Next(0, 95));
+            var travel = TimeSpan.FromMilliseconds(random.Next(270, 470));
+            var total = delay + travel;
+            translate.BeginAnimation(TranslateTransform.XProperty,
+                new DoubleAnimation(startOffsetX, 0, travel) { BeginTime = delay, EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut } });
+            translate.BeginAnimation(TranslateTransform.YProperty,
+                new DoubleAnimation(startOffsetY, 0, travel) { BeginTime = delay, EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut } });
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty,
+                new DoubleAnimation(0.35, 1.15, travel) { BeginTime = delay, EasingFunction = easing });
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(0.35, 1.15, travel) { BeginTime = delay, EasingFunction = easing });
+
+            var opacity = new DoubleAnimationUsingKeyFrames { Duration = total + TimeSpan.FromMilliseconds(80) };
+            opacity.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(delay)));
+            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0.82, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(55)), easing));
+            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0.4, KeyTime.FromTimeSpan(total), easing));
+            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(total + TimeSpan.FromMilliseconds(80)), easing));
+            particle.BeginAnimation(OpacityProperty, opacity);
+        }
     }
 
     private void HideLauncher()
@@ -684,6 +771,7 @@ public partial class MainWindow : Window
             }
 
             Hide();
+            ParticleCanvas.Children.Clear();
             BeginAnimation(OpacityProperty, null);
             Opacity = 1;
             _isHiding = false;
