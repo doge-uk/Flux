@@ -37,6 +37,7 @@ public partial class SettingsWindow : Window
         LocalEndpointBox.Text = settings.LocalEndpoint;
         LocalModelBox.Text = settings.LocalModel;
         LocalLargeModelBox.Text = settings.LocalLargeModel;
+        CloudEndpointBox.Text = settings.CloudEndpoint;
         CloudModelBox.Text = settings.CloudModel;
         StartupBox.IsChecked = _startup.IsEnabled;
         UpdateCheckBox.IsChecked = settings.CheckForUpdatesOnLaunch;
@@ -117,7 +118,14 @@ public partial class SettingsWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        if (selectedMode == AiMode.Cloud && string.IsNullOrWhiteSpace(CloudModelBox.Text))
+        if (selectedMode is AiMode.Cloud or AiMode.Automatic &&
+            !EndpointValidator.IsHttpEndpoint(CloudEndpointBox.Text))
+        {
+            System.Windows.MessageBox.Show("Enter a valid HTTP or HTTPS cloud endpoint.", "Flux Settings",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (selectedMode is AiMode.Cloud or AiMode.Automatic && string.IsNullOrWhiteSpace(CloudModelBox.Text))
         {
             System.Windows.MessageBox.Show("Choose a cloud model.", "Flux Settings",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -129,6 +137,7 @@ public partial class SettingsWindow : Window
         settings.LocalEndpoint = LocalEndpointBox.Text.TrimEnd('/');
         settings.LocalModel = LocalModelBox.Text.Trim();
         settings.LocalLargeModel = LocalLargeModelBox.Text.Trim();
+        settings.CloudEndpoint = CloudEndpointBox.Text.TrimEnd('/');
         settings.CloudModel = CloudModelBox.Text.Trim();
         settings.StartWithWindows = StartupBox.IsChecked == true;
         settings.CheckForUpdatesOnLaunch = UpdateCheckBox.IsChecked == true;
@@ -175,6 +184,9 @@ public partial class SettingsWindow : Window
         LocalEndpointBox.IsEnabled = localEnabled;
         LocalModelBox.IsEnabled = localEnabled;
         LocalLargeModelBox.IsEnabled = localEnabled;
+        var cloudEnabled = mode is AiMode.Cloud or AiMode.Automatic;
+        CloudEndpointBox.IsEnabled = cloudEnabled;
+        CloudModelBox.IsEnabled = cloudEnabled;
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => CloseWithResult(false);

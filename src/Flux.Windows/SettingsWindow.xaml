@@ -270,6 +270,8 @@
                                 CornerRadius="18" Padding="20" Margin="0,0,0,14">
                             <StackPanel>
                                 <TextBlock Text="OPTIONAL CLOUD" Foreground="#777F8C" FontSize="11" FontWeight="SemiBold" />
+                                <TextBlock Text="Cloud endpoint" Foreground="#BEC3CC" Margin="0,12,0,0" />
+                                <TextBox x:Name="CloudEndpointBox" />
                                 <TextBlock Text="Cloud model" Foreground="#BEC3CC" Margin="0,12,0,0" />
                                 <TextBox x:Name="CloudModelBox" />
                                 <TextBlock Text="Reads OPENAI_API_KEY from your environment. Flux never saves the key."
