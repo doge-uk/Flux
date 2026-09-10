@@ -103,15 +103,29 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        if (!Uri.TryCreate(LocalEndpointBox.Text, UriKind.Absolute, out _))
+        var selectedMode = ModeBox.SelectedItem is AiMode mode ? mode : AiMode.Local;
+        if (selectedMode is AiMode.Local or AiMode.Automatic &&
+            !EndpointValidator.IsHttpEndpoint(LocalEndpointBox.Text))
         {
-            System.Windows.MessageBox.Show("Enter a valid absolute local endpoint.", "Flux Settings",
+            System.Windows.MessageBox.Show("Enter a valid HTTP or HTTPS local endpoint.", "Flux Settings",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (selectedMode is AiMode.Local or AiMode.Automatic && string.IsNullOrWhiteSpace(LocalModelBox.Text))
+        {
+            System.Windows.MessageBox.Show("Choose a fast local model.", "Flux Settings",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (selectedMode == AiMode.Cloud && string.IsNullOrWhiteSpace(CloudModelBox.Text))
+        {
+            System.Windows.MessageBox.Show("Choose a cloud model.", "Flux Settings",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         var settings = _settingsService.Current;
-        settings.AiMode = (AiMode)(ModeBox.SelectedItem ?? AiMode.Local);
+        settings.AiMode = selectedMode;
         settings.LocalEndpoint = LocalEndpointBox.Text.TrimEnd('/');
         settings.LocalModel = LocalModelBox.Text.Trim();
         settings.LocalLargeModel = LocalLargeModelBox.Text.Trim();

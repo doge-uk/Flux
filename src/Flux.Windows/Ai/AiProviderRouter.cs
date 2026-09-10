@@ -65,10 +65,10 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
     private bool HasFastLocalConfiguration => HasLocalModel(settings.LocalModel);
     private bool HasLargeLocalConfiguration => HasLocalModel(settings.LocalLargeModel);
     private bool HasLocalModel(string model) =>
-        Uri.TryCreate(settings.LocalEndpoint, UriKind.Absolute, out _) && !string.IsNullOrWhiteSpace(model);
+        EndpointValidator.IsHttpEndpoint(settings.LocalEndpoint) && !string.IsNullOrWhiteSpace(model);
 
     private bool HasCloudConfiguration =>
-        Uri.TryCreate(settings.CloudEndpoint, UriKind.Absolute, out _) &&
+        EndpointValidator.IsHttpEndpoint(settings.CloudEndpoint) &&
         !string.IsNullOrWhiteSpace(settings.CloudModel) &&
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
 

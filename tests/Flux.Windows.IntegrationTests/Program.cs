@@ -14,6 +14,7 @@ await TestUpdateIntegrityAsync();
 TestProcessClassification();
 TestMalformedToolCallParsing();
 TestMarkdownRendering();
+TestEndpointValidation();
 
 if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
 {
@@ -298,6 +299,19 @@ static string ReadInlineText(System.Windows.Documents.InlineCollection inlines)
         }
     }
     return builder.ToString();
+}
+
+static void TestEndpointValidation()
+{
+    Assert(EndpointValidator.IsHttpEndpoint("http://localhost:11434"),
+        "A valid Ollama endpoint was rejected.");
+    Assert(EndpointValidator.IsHttpEndpoint("https://models.example.test/v1"),
+        "A valid HTTPS endpoint was rejected.");
+    Assert(!EndpointValidator.IsHttpEndpoint("file:///C:/models") &&
+        !EndpointValidator.IsHttpEndpoint("localhost:11434") &&
+        !EndpointValidator.IsHttpEndpoint(string.Empty),
+        "A non-HTTP or malformed model endpoint was accepted.");
+    Console.WriteLine("PASS  Model endpoints are restricted to valid HTTP or HTTPS URLs");
 }
 
 static Process StartBackgroundProcess(string executable)
