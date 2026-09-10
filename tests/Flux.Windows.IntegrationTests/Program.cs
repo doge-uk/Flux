@@ -7,6 +7,7 @@ using Flux.Core;
 using Flux.Windows;
 using Flux.Windows.Ai;
 using Flux.Windows.Configuration;
+using Flux.Windows.Search;
 using Flux.Windows.SystemIntegration;
 using Flux.Windows.Updates;
 
@@ -15,6 +16,7 @@ TestProcessClassification();
 TestMalformedToolCallParsing();
 TestMarkdownRendering();
 TestEndpointValidation();
+await TestFileSearchBudgetAsync();
 
 if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
 {
@@ -312,6 +314,17 @@ static void TestEndpointValidation()
         !EndpointValidator.IsHttpEndpoint(string.Empty),
         "A non-HTTP or malformed model endpoint was accepted.");
     Console.WriteLine("PASS  Model endpoints are restricted to valid HTTP or HTTPS URLs");
+}
+
+static async Task TestFileSearchBudgetAsync()
+{
+    var search = new FileSearchService();
+    var started = Stopwatch.StartNew();
+    _ = await search.SearchAsync($"flux-no-match-{Guid.NewGuid():N}", 8);
+    started.Stop();
+    Assert(started.Elapsed < TimeSpan.FromSeconds(1),
+        $"File search exceeded its interactive latency budget: {started.Elapsed.TotalMilliseconds:N0} ms.");
+    Console.WriteLine($"PASS  File search remains bounded ({started.Elapsed.TotalMilliseconds:N0} ms)");
 }
 
 static Process StartBackgroundProcess(string executable)
