@@ -180,25 +180,48 @@ public partial class MainWindow : Window
         }
 
         var model = status.Model.Replace(':', ' ').ToUpperInvariant();
+        _aiModeLabel = status.IsLarger ? $"UPGRADED · {model}" : $"LOCAL · {model}";
+        if (status.Stage == AiModelStage.Unloaded)
+        {
+            ModelBadge.Visibility = Visibility.Collapsed;
+            return;
+        }
+
         ModelBadge.Visibility = Visibility.Visible;
-        ModelBadge.ToolTip = $"{status.Provider}: {status.Model}";
+        ModelBadge.ToolTip = status.Stage == AiModelStage.Upgraded
+            ? $"Upgraded to {status.Provider}: {status.Model}"
+            : $"{status.Provider}: {status.Model}";
         ModelBadgeText.Text = status.Stage switch
         {
-            AiModelStage.Loading => $"{model} LOADING",
-            AiModelStage.Ready => $"{model} READY",
-            AiModelStage.Upgraded => $"↑ {model} ACTIVE",
-            AiModelStage.Unloaded => $"{model} UNLOADED",
-            AiModelStage.Failed => $"{model} OFFLINE",
-            _ => $"{model} ACTIVE"
+            AiModelStage.Loading => "↻",
+            AiModelStage.Ready => "✓",
+            AiModelStage.Upgraded => "✓↑",
+            AiModelStage.Failed => "!",
+            _ => "✓"
         };
         ModelBadgeText.Foreground = status.Stage switch
         {
             AiModelStage.Failed => new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 150, 150)),
             AiModelStage.Upgraded => new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 176, 255)),
-            AiModelStage.Unloaded => new SolidColorBrush(System.Windows.Media.Color.FromRgb(126, 134, 148)),
             _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(158, 235, 217))
         };
-        _aiModeLabel = status.IsLarger ? $"UPGRADED · {model}" : $"LOCAL · {model}";
+        ModelBadge.Background = new SolidColorBrush(status.Stage switch
+        {
+            AiModelStage.Failed => System.Windows.Media.Color.FromArgb(28, 255, 90, 90),
+            AiModelStage.Upgraded => System.Windows.Media.Color.FromArgb(30, 139, 124, 255),
+            _ => System.Windows.Media.Color.FromArgb(22, 0, 217, 166)
+        });
+        ModelBadgeRotation.BeginAnimation(RotateTransform.AngleProperty, null);
+        ModelBadgeRotation.Angle = 0;
+        if (status.Stage == AiModelStage.Loading)
+        {
+            ModelBadgeRotation.BeginAnimation(
+                RotateTransform.AngleProperty,
+                new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(760))
+                {
+                    RepeatBehavior = RepeatBehavior.Forever
+                });
+        }
 
         if (BusyPanel.Visibility == Visibility.Visible)
         {
