@@ -110,9 +110,9 @@ public partial class MainWindow : Window
         LauncherScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, null);
         LauncherTranslate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
         Opacity = 0;
-        LauncherScale.ScaleX = 0.975;
-        LauncherScale.ScaleY = 0.975;
-        LauncherTranslate.Y = -7;
+        LauncherScale.ScaleX = 0.96;
+        LauncherScale.ScaleY = 0.96;
+        LauncherTranslate.Y = -11;
         Show();
         WindowState = WindowState.Normal;
         Activate();
@@ -299,12 +299,15 @@ public partial class MainWindow : Window
         _history.Add(QueryBox.Text);
         _historyIndex = -1;
 
-        if (selected.Action.Permission >= PermissionLevel.Disruptive)
+        if (ShouldConfirm(selected.Action))
         {
             _pendingAction = selected.Action;
+            var targetDescription = selected.Action.Type == FluxActionType.CloseAllExcept
+                ? "Keep open: " + selected.Action.Target.Replace("\n", ", ", StringComparison.Ordinal)
+                : "Target: " + selected.Action.Target;
             ShowConfirmation(
                 selected.Action.DisplayName ?? "Run this action?",
-                $"This can interrupt an application or cause unsaved work to be lost.\n\nTarget: {selected.Action.Target}",
+                $"This can interrupt an application or cause unsaved work to be lost.\n\n{targetDescription}",
                 selected.Action.Permission);
             return;
         }
@@ -341,6 +344,9 @@ public partial class MainWindow : Window
                 case FluxActionType.TerminateProcess:
                 case FluxActionType.RestartProcess:
                     await ExecuteProcessActionAsync(action);
+                    break;
+                case FluxActionType.CloseAllExcept:
+                    await ExecuteCloseAllExceptAsync(action);
                     break;
                 case FluxActionType.AskAi:
                     await RunAgentAsync(action.Target);
@@ -445,6 +451,13 @@ public partial class MainWindow : Window
         ShowToolResults([result]);
     }
 
+    private async Task ExecuteCloseAllExceptAsync(FluxAction action)
+    {
+        var exclusions = action.Target.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var result = await _processes.CloseAllExceptAsync(exclusions);
+        ShowToolResults([result]);
+    }
+
     private async Task RunAgentAsync(string request)
     {
         ShowBusy("LOCAL AI");
@@ -468,6 +481,13 @@ public partial class MainWindow : Window
             var result = await _agent.RunAsync(request, context, progress);
             if (result.PendingActions.Count > 0)
             {
+                if (!_settings.ConfirmBeforeClosingApplications && result.PendingActions.All(IsApplicationCloseTool))
+                {
+                    ShowBusy("EXECUTING");
+                    ShowToolResults(await ExecutePendingToolsAsync(result.PendingActions));
+                    return;
+                }
+
                 _pendingTools = result.PendingActions;
                 var details = string.Join(Environment.NewLine, result.PendingActions.Select(pending => pending.ConfirmationText));
                 ShowConfirmation(
@@ -509,24 +529,44 @@ public partial class MainWindow : Window
         }
 
         ShowBusy("EXECUTING");
+        ShowToolResults(await ExecutePendingToolsAsync(toolCalls));
+    }
+
+    private async Task<IReadOnlyList<ToolResult>> ExecutePendingToolsAsync(IReadOnlyList<PendingToolCall> toolCalls)
+    {
         var results = new List<ToolResult>();
         foreach (var pending in toolCalls)
         {
-            if (_tools.TryGet(pending.Call.Name, out var tool) && tool is not null)
+            if (!_tools.TryGet(pending.Call.Name, out var tool) || tool is null)
             {
-                try
-                {
-                    results.Add(await tool.ExecuteAsync(pending.Call));
-                }
-                catch (Exception exception)
-                {
-                    results.Add(new ToolResult(pending.Call.Id, pending.Call.Name, false, exception.Message));
-                }
+                results.Add(new ToolResult(pending.Call.Id, pending.Call.Name, false, "No action was performed."));
+                continue;
+            }
+
+            try
+            {
+                results.Add(await tool.ExecuteAsync(pending.Call));
+            }
+            catch (Exception exception)
+            {
+                _log.Error($"Tool {pending.Call.Name} failed.", exception);
+                results.Add(new ToolResult(pending.Call.Id, pending.Call.Name, false, "The action could not be completed."));
             }
         }
-
-        ShowToolResults(results);
+        return results;
     }
+
+    private bool ShouldConfirm(FluxAction action) =>
+        action.Permission >= PermissionLevel.Disruptive &&
+        (_settings.ConfirmBeforeClosingApplications || !IsGracefulApplicationClose(action));
+
+    private static bool IsGracefulApplicationClose(FluxAction action) =>
+        action.Type == FluxActionType.CloseAllExcept ||
+        action.Type == FluxActionType.TerminateProcess &&
+        string.Equals(action.Arguments?.GetValueOrDefault("verb"), "close", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsApplicationCloseTool(PendingToolCall pending) =>
+        pending.Definition.Name is "close_application" or "close_applications" or "close_applications_except";
 
     private bool IsActionResult(ToolResult result) =>
         _tools.TryGet(result.Name, out var tool) && tool is not null &&
@@ -670,15 +710,15 @@ public partial class MainWindow : Window
     {
         var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
         BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(125)) { EasingFunction = easing });
+            new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(190)) { EasingFunction = easing });
         LauncherScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty,
-            new DoubleAnimation(0.975, 1, TimeSpan.FromMilliseconds(155)) { EasingFunction = easing });
+            new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(230)) { EasingFunction = easing });
         LauncherScale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty,
-            new DoubleAnimation(0.975, 1, TimeSpan.FromMilliseconds(155)) { EasingFunction = easing });
+            new DoubleAnimation(0.96, 1, TimeSpan.FromMilliseconds(230)) { EasingFunction = easing });
         LauncherTranslate.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
-            new DoubleAnimation(-7, 0, TimeSpan.FromMilliseconds(155)) { EasingFunction = easing });
+            new DoubleAnimation(-11, 0, TimeSpan.FromMilliseconds(230)) { EasingFunction = easing });
         SearchPill.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(0.58, 1, TimeSpan.FromMilliseconds(210)) { EasingFunction = easing });
+            new DoubleAnimation(0.24, 1, TimeSpan.FromMilliseconds(280)) { EasingFunction = easing });
         BeginParticleBuild();
     }
 
@@ -692,7 +732,7 @@ public partial class MainWindow : Window
         const double bottom = 94;
         const double left = 10;
         var right = Math.Max(left + 1, width - 10);
-        const int particleCount = 34;
+        const int particleCount = 56;
 
         for (var index = 0; index < particleCount; index++)
         {
@@ -705,11 +745,11 @@ public partial class MainWindow : Window
                 : top + random.NextDouble() * (bottom - top);
             var fromCentreX = targetX - width / 2;
             var fromCentreY = targetY - (top + bottom) / 2;
-            var distance = 18 + random.NextDouble() * 42;
+            var distance = 28 + random.NextDouble() * 66;
             var length = Math.Max(1, Math.Sqrt(fromCentreX * fromCentreX + fromCentreY * fromCentreY));
             var startOffsetX = fromCentreX / length * distance + (random.NextDouble() - 0.5) * 18;
             var startOffsetY = fromCentreY / length * distance + (random.NextDouble() - 0.5) * 18;
-            var size = 1.5 + random.NextDouble() * 2.7;
+            var size = 1.8 + random.NextDouble() * 3.4;
             var particle = new Ellipse
             {
                 Width = size,
@@ -732,7 +772,7 @@ public partial class MainWindow : Window
             ParticleCanvas.Children.Add(particle);
 
             var delay = TimeSpan.FromMilliseconds(random.Next(0, 95));
-            var travel = TimeSpan.FromMilliseconds(random.Next(270, 470));
+            var travel = TimeSpan.FromMilliseconds(random.Next(340, 590));
             var total = delay + travel;
             translate.BeginAnimation(TranslateTransform.XProperty,
                 new DoubleAnimation(startOffsetX, 0, travel) { BeginTime = delay, EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut } });
@@ -745,8 +785,8 @@ public partial class MainWindow : Window
 
             var opacity = new DoubleAnimationUsingKeyFrames { Duration = total + TimeSpan.FromMilliseconds(80) };
             opacity.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(delay)));
-            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0.82, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(55)), easing));
-            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0.4, KeyTime.FromTimeSpan(total), easing));
+            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0.96, KeyTime.FromTimeSpan(delay + TimeSpan.FromMilliseconds(55)), easing));
+            opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0.58, KeyTime.FromTimeSpan(total), easing));
             opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(total + TimeSpan.FromMilliseconds(80)), easing));
             particle.BeginAnimation(OpacityProperty, opacity);
         }

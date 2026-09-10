@@ -43,10 +43,10 @@ Cloud mode is optional. It reads `OPENAI_API_KEY` from the environment; API keys
 |---|---|---|
 | 0 | Automatic, read-only | search, process list, system stats |
 | 1 | Automatic, reversible | launch, open, create user folder |
-| 2 | Confirmation required | close, terminate, restart process |
+| 2 | Confirmation required by default | close, terminate, restart process |
 | 3 | Explicit destructive confirmation | unrestricted PowerShell |
 
-System/session processes and a protected Windows process list are refused even after an AI request. Automatic folder creation is restricted to the current user profile.
+The close-confirmation setting may be disabled for normal application-close commands only. Force termination, restart, and destructive tools remain gated. System/session processes and a protected Windows process list are refused even after an AI request. Automatic folder creation is restricted to the current user profile.
 
 ## Build a distributable package
 

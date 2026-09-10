@@ -35,6 +35,26 @@ public sealed partial class DeterministicCommandRouter(
             return RouteDecision.Search([folderResult]);
         }
 
+        var closeAllExcept = CloseAllExceptForwardRegex().Match(query);
+        if (!closeAllExcept.Success)
+        {
+            closeAllExcept = CloseAllExceptReverseRegex().Match(query);
+        }
+        if (closeAllExcept.Success)
+        {
+            var exclusions = SplitApplicationNames(closeAllExcept.Groups["names"].Value);
+            if (exclusions.Length > 0)
+            {
+                return RouteDecision.Execute(
+                    new FluxAction(
+                        FluxActionType.CloseAllExcept,
+                        string.Join('\n', exclusions),
+                        PermissionLevel.Disruptive,
+                        $"Close everything except {string.Join(", ", exclusions)}"),
+                    $"Keep open: {string.Join(", ", exclusions)}");
+            }
+        }
+
         var createFolder = CreateFolderRegex().Match(query);
         if (createFolder.Success)
         {
@@ -95,9 +115,12 @@ public sealed partial class DeterministicCommandRouter(
 
         var looksLikeQuestion = QuestionRegex().IsMatch(query);
         var looksLikeComplexAction = ComplexActionRegex().IsMatch(query);
-        var strongDeterministicMatch = combined.FirstOrDefault()?.Score >= 600;
+        var strongestScore = combined.FirstOrDefault()?.Score ?? 0;
+        var wordCount = launchQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        var simpleSearch = wordCount <= 3 && !looksLikeQuestion && !looksLikeComplexAction;
+        var minimumSearchScore = simpleSearch ? 330 : 620;
 
-        if (combined.Length > 0 && (!looksLikeQuestion && !looksLikeComplexAction || strongDeterministicMatch))
+        if (combined.Length > 0 && strongestScore >= minimumSearchScore)
         {
             return RouteDecision.Search(combined);
         }
@@ -134,6 +157,13 @@ public sealed partial class DeterministicCommandRouter(
     private static string CultureTitle(string value) =>
         System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(value.Replace("my ", string.Empty));
 
+    private static string[] SplitApplicationNames(string value) =>
+        ApplicationSeparatorRegex().Split(value.Trim())
+            .Select(item => item.Trim(' ', '\'', '"'))
+            .Where(item => item.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
     [GeneratedRegex("^(?:open|launch|start|run)\\s+", RegexOptions.IgnoreCase)]
     private static partial Regex LaunchVerbRegex();
 
@@ -145,6 +175,15 @@ public sealed partial class DeterministicCommandRouter(
 
     [GeneratedRegex("^(?<verb>close|kill|terminate|restart)\\s+(?<name>.+)$", RegexOptions.IgnoreCase)]
     private static partial Regex ProcessActionRegex();
+
+    [GeneratedRegex("^\\s*(?:please\\s+)?(?:close|quit|exit)\\s+(?:everything|all(?:\\s+apps?)?)\\s+(?:except|execpt|excluding)\\s+(?<names>.+?)\\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex CloseAllExceptForwardRegex();
+
+    [GeneratedRegex("^\\s*(?:except|execpt|excluding)\\s+(?<names>.+?)\\s+(?:please\\s+)?(?:close|quit|exit)\\s+(?:everything|all(?:\\s+apps?)?)\\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex CloseAllExceptReverseRegex();
+
+    [GeneratedRegex("\\s*(?:,|;|&|\\band\\b)\\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex ApplicationSeparatorRegex();
 
     [GeneratedRegex("(?:,|\\s+(?:and|then)\\s+)", RegexOptions.IgnoreCase)]
     private static partial Regex CompoundProcessTargetsRegex();

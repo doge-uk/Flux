@@ -39,6 +39,7 @@ public partial class SettingsWindow : Window
         CloudModelBox.Text = settings.CloudModel;
         StartupBox.IsChecked = _startup.IsEnabled;
         UpdateCheckBox.IsChecked = settings.CheckForUpdatesOnLaunch;
+        ConfirmCloseBox.IsChecked = settings.ConfirmBeforeClosingApplications;
         HotkeyBox.ItemsSource = _hotkeys;
         HotkeyBox.SelectedItem = _hotkeys.FirstOrDefault(choice =>
             choice.Modifiers == settings.HotkeyModifiers && choice.Key == settings.HotkeyKey) ?? _hotkeys[0];
@@ -94,6 +95,7 @@ public partial class SettingsWindow : Window
         settings.CloudModel = CloudModelBox.Text.Trim();
         settings.StartWithWindows = StartupBox.IsChecked == true;
         settings.CheckForUpdatesOnLaunch = UpdateCheckBox.IsChecked == true;
+        settings.ConfirmBeforeClosingApplications = ConfirmCloseBox.IsChecked == true;
         var hotkey = HotkeyBox.SelectedItem as HotkeyChoice ?? _hotkeys[0];
         settings.HotkeyModifiers = hotkey.Modifiers;
         settings.HotkeyKey = hotkey.Key;

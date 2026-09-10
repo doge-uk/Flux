@@ -20,6 +20,12 @@ try
     await WaitForWindowAsync(pwsh);
 
     var service = new WindowsProcessService([powershell.Id, pwsh.Id]);
+    var refused = await service.CloseAllExceptAsync(["definitely-not-a-running-app"]);
+    Assert(!refused.Success, "An unresolved exclusion should stop the operation.");
+    Assert(!HasExited(powershell.Id) && !HasExited(pwsh.Id),
+        "Flux closed an application after failing to identify an exclusion.");
+    Console.WriteLine("PASS  Unresolved exclusions close nothing");
+
     var closeExcept = await service.CloseAllExceptAsync(["pwsh"]);
     Assert(closeExcept.Success, closeExcept.Output);
     Assert(await WaitForGoneAsync(powershell.Id), "Windows PowerShell was reported closed but is still running.");

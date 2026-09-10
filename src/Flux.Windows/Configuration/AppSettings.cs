@@ -19,6 +19,7 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool LaunchHidden { get; set; }
     public bool CheckForUpdatesOnLaunch { get; set; } = true;
+    public bool ConfirmBeforeClosingApplications { get; set; } = true;
     public int HistoryLimit { get; set; } = 100;
     public int HotkeyModifiers { get; set; } = 0x0001; // Alt
     public int HotkeyKey { get; set; } = 0x20; // Space

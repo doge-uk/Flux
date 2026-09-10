@@ -283,6 +283,9 @@
                                 <TextBlock Text="BEHAVIOUR" Foreground="#777F8C" FontSize="11" FontWeight="SemiBold" />
                                 <CheckBox x:Name="StartupBox" Content="Start Flux with Windows" Margin="0,16,0,12" />
                                 <CheckBox x:Name="UpdateCheckBox" Content="Check for updates when Flux launches" Margin="0,0,0,18" />
+                                <CheckBox x:Name="ConfirmCloseBox" Content="Confirm before closing applications" Margin="0,0,0,5" />
+                                <TextBlock Text="When disabled, normal close commands run immediately. Force termination and destructive tools still ask."
+                                           Foreground="#777E8C" FontSize="12" TextWrapping="Wrap" Margin="24,0,0,18" />
 
                                 <TextBlock Text="Global shortcut" Foreground="#BEC3CC" />
                                 <ComboBox x:Name="HotkeyBox" DisplayMemberPath="Label" />

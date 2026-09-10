@@ -9,7 +9,8 @@ var tests = new (string Name, Func<Task> Run)[]
 {
     ("Fuzzy exact match outranks prefix", TestFuzzyRanking),
     ("Known folder stays deterministic", TestKnownFolder),
-    ("Complex request routes to AI", TestComplexRoute),
+    ("Close everything except routes deterministically", TestCloseEverythingExcept),
+    ("Weak search matches fall back to AI", TestWeakSearchFallback),
     ("Process action requires confirmation", TestProcessPermission),
     ("Desktop folder command parses a safe name", TestCreateFolderParsing),
     ("Agent cannot auto-run disruptive tool", TestAgentSafetyGate),
@@ -55,11 +56,36 @@ static async Task TestKnownFolder()
     Assert(decision.Results.Single().Action.Permission == PermissionLevel.Reversible, "Opening a folder is reversible.");
 }
 
-static async Task TestComplexRoute()
+static async Task TestCloseEverythingExcept()
 {
     var router = Router();
-    var decision = await router.RouteAsync("close everything except Firefox and Discord");
-    Assert(decision.Kind == RouteKind.Ai, "Multi-step exception request should route to AI.");
+    var forward = await router.RouteAsync("close everything except Firefox and Discord");
+    Assert(forward.Kind == RouteKind.ImmediateAction, "The standard close-except phrase should be deterministic.");
+    Assert(forward.Action?.Type == FluxActionType.CloseAllExcept, "Expected a close-all-except action.");
+
+    var reversedTypo = await router.RouteAsync("execpt firefox and chatgpt close everything");
+    Assert(reversedTypo.Kind == RouteKind.ImmediateAction, "The reversed phrase with the common typo was not recognized.");
+    Assert(reversedTypo.Action?.Target.Split('\n').SequenceEqual(["firefox", "chatgpt"]) == true,
+        "The exclusions were not parsed into separate application names.");
+}
+
+static async Task TestWeakSearchFallback()
+{
+    var helpResult = new SearchResult(
+        "help",
+        "Help",
+        @"C:\ProgramData\MyLanViewer\Help.lnk",
+        SearchResultKind.Application,
+        120,
+        new FluxAction(FluxActionType.Launch, @"C:\ProgramData\MyLanViewer\Help.lnk"));
+    var router = new DeterministicCommandRouter(new FixedApplications([helpResult]), new FakeFiles());
+    var sentence = await router.RouteAsync("write me a short poem about space");
+    Assert(sentence.Kind == RouteKind.Ai, "A weak Help.lnk match hijacked an unrelated sentence.");
+
+    var exactResult = helpResult with { Title = "Firefox", Score = 1000 };
+    router = new DeterministicCommandRouter(new FixedApplications([exactResult]), new FakeFiles());
+    var app = await router.RouteAsync("Firefox");
+    Assert(app.Kind == RouteKind.Search, "An exact application match should remain deterministic.");
 }
 
 static async Task TestProcessPermission()
@@ -160,6 +186,12 @@ sealed class FakeApplications : IApplicationCatalog
 {
     public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     public IReadOnlyList<SearchResult> Search(string query, int limit = 8) => Array.Empty<SearchResult>();
+}
+
+sealed class FixedApplications(IReadOnlyList<SearchResult> results) : IApplicationCatalog
+{
+    public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public IReadOnlyList<SearchResult> Search(string query, int limit = 8) => results.Take(limit).ToArray();
 }
 
 sealed class FakeFiles : IFileSearchService

@@ -164,8 +164,19 @@ public sealed class WindowsProcessService : IProcessService
             .Select(item => item.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var unresolved = normalizedExclusions
+            .Where(exclusion => !groups.Any(group => IsExclusionMatch(exclusion, group)))
+            .ToArray();
+        if (unresolved.Length > 0)
+        {
+            return Task.FromResult(new ToolResult(
+                "close_applications_except",
+                "close_applications_except",
+                false,
+                $"Couldn't safely identify: {string.Join(", ", unresolved)}{Environment.NewLine}Nothing was closed."));
+        }
         var targets = groups
-            .Where(group => !normalizedExclusions.Any(exclusion => IsStrongNameMatch(exclusion, group)))
+            .Where(group => !normalizedExclusions.Any(exclusion => IsExclusionMatch(exclusion, group)))
             .ToArray();
         return CloseGroupsAsync("close_applications_except", targets, [], cancellationToken);
     }
@@ -462,6 +473,19 @@ public sealed class WindowsProcessService : IProcessService
                     aliasWords.StartsWith(requestedWords + " ", StringComparison.OrdinalIgnoreCase) ||
                     aliasWords.EndsWith(" " + requestedWords, StringComparison.OrdinalIgnoreCase);
             });
+    }
+
+    private static bool IsExclusionMatch(string requestedName, ApplicationGroup group)
+    {
+        if (IsStrongNameMatch(requestedName, group))
+        {
+            return true;
+        }
+
+        var requested = Compact(NormalizeWords(requestedName));
+        return requested == "chatgpt" && group.Processes.Any(process =>
+            string.Equals(Compact(NormalizeWords(process.Name)), "codex", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Compact(NormalizeWords(process.FriendlyName)), "codex", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string NormalizeWords(string value)

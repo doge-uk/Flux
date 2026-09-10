@@ -51,9 +51,13 @@ public sealed class ApplicationCatalog(AppSettings settings, ILogService log) : 
         return snapshot
             .Select(entry =>
             {
-                var score = FuzzyMatcher.Score(query, entry.Name);
+                var baseScore = FuzzyMatcher.Score(query, entry.Name);
+                if (baseScore <= 0)
+                {
+                    return (entry, score: 0d);
+                }
                 settings.ApplicationUsage.TryGetValue(entry.Target, out var usage);
-                score += Math.Min(120, usage * 8);
+                var score = baseScore + Math.Min(120, usage * 8);
                 return (entry, score);
             })
             .Where(item => item.score > 0)

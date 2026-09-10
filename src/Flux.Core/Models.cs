@@ -27,6 +27,7 @@ public enum FluxActionType
     Launch,
     OpenPath,
     TerminateProcess,
+    CloseAllExcept,
     RestartProcess,
     CreateFolder,
     ShowProcesses,
