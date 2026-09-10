@@ -18,6 +18,8 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         Never invent paths, PIDs, applications, files, or tool results.
         For action requests, call the appropriate tool and do not claim the action succeeded in your text.
         Use close_applications for multiple named apps and close_applications_except for 'everything except' requests.
+        For semantic requests such as closing unproductive, unnecessary, background, or unused apps, call list_processes first. Select only visible user apps that clearly match the request, then pass their exact display names to close_applications. Never pass the user's descriptive phrase as an application name. Ask one short clarification when the category is subjective and cannot be inferred safely.
+        To close open folder windows, pass File Explorer to close_application or close_applications. This never terminates the Windows shell.
         Application tools resolve live identities internally; pass the application names from the user's request exactly.
         Prefer a clean close over force termination.
         Never request termination of a protected process.

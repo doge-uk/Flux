@@ -182,7 +182,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         public ToolDefinition Definition { get; } = new(
             "close_application",
-            "Close one visible user application by unique live identity. Flux verifies exit and force-closes the exact process tree only if the app ignores a clean close.",
+            "Close one visible user application by unique live identity. The name File Explorer safely closes folder windows without terminating the Windows shell. Flux verifies application exit and force-closes the exact process tree only if the app ignores a clean close.",
             Schema(("name", "string", "Application name exactly as the user said it", true)),
             PermissionLevel.Disruptive);
 
@@ -198,7 +198,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         public ToolDefinition Definition { get; } = new(
             "close_applications",
-            "Close several specifically named visible user applications. Use this for requests such as 'close Discord and Chrome'.",
+            "Close several specifically named visible user applications. Use this for requests such as 'close Discord and Chrome'. File Explorer safely closes folder windows without terminating the Windows shell.",
             StringArraySchema("names", "Exact application names from the user's request"),
             PermissionLevel.Disruptive);
 

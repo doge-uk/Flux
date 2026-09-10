@@ -76,9 +76,9 @@ public sealed partial class DeterministicCommandRouter(
         {
             var verb = processAction.Groups["verb"].Value.ToLowerInvariant();
             var name = processAction.Groups["name"].Value.Trim();
-            if (CompoundProcessTargetsRegex().IsMatch(name))
+            if (CompoundProcessTargetsRegex().IsMatch(name) || SemanticProcessTargetRegex().IsMatch(name))
             {
-                return RouteDecision.Ai("This request targets multiple applications.");
+                return RouteDecision.Ai("This request needs AI to identify the intended applications.");
             }
 
             var type = verb == "restart" ? FluxActionType.RestartProcess : FluxActionType.TerminateProcess;
@@ -107,18 +107,31 @@ public sealed partial class DeterministicCommandRouter(
 
         var launchQuery = StripLaunchVerb(query);
         var appResults = applications.Search(launchQuery, 8);
+        var looksLikeQuestion = QuestionRegex().IsMatch(query);
+        var looksLikeComplexAction = ComplexActionRegex().IsMatch(query);
+        var wordCount = launchQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        var simpleSearch = wordCount <= 3 && !looksLikeQuestion && !looksLikeComplexAction;
+        var minimumSearchScore = simpleSearch ? 330 : 620;
+
+        // Installed applications are already indexed in memory. Return strong matches before
+        // touching the filesystem so ordinary launcher searches feel immediate.
+        if (appResults.FirstOrDefault()?.Score >= 760)
+        {
+            return RouteDecision.Search(appResults);
+        }
+
+        // Natural-language requests should never wait for a broad file scan.
+        if (!simpleSearch)
+        {
+            return RouteDecision.Ai("This request needs interpretation or a multi-step plan.");
+        }
+
         var fileResults = await files.SearchAsync(launchQuery, 8, cancellationToken);
         var combined = appResults.Concat(fileResults)
             .OrderByDescending(result => result.Score)
             .Take(10)
             .ToArray();
-
-        var looksLikeQuestion = QuestionRegex().IsMatch(query);
-        var looksLikeComplexAction = ComplexActionRegex().IsMatch(query);
         var strongestScore = combined.FirstOrDefault()?.Score ?? 0;
-        var wordCount = launchQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
-        var simpleSearch = wordCount <= 3 && !looksLikeQuestion && !looksLikeComplexAction;
-        var minimumSearchScore = simpleSearch ? 330 : 620;
 
         if (combined.Length > 0 && strongestScore >= minimumSearchScore)
         {
@@ -187,6 +200,9 @@ public sealed partial class DeterministicCommandRouter(
 
     [GeneratedRegex("(?:,|\\s+(?:and|then)\\s+)", RegexOptions.IgnoreCase)]
     private static partial Regex CompoundProcessTargetsRegex();
+
+    [GeneratedRegex("^(?:anything|everything|something|nothing|whatever|all\\b|any\\b|apps?\\b|programs?\\b)|\\b(?:that|which|except|excluding|isn'?t|isnt|aren'?t|not|unused|unneeded|unproductive|productive|background|unnecessary|clutter)\\b", RegexOptions.IgnoreCase)]
+    private static partial Regex SemanticProcessTargetRegex();
 
     [GeneratedRegex("(?:what(?:'s| is).*(?:ram|memory)|using (?:my )?(?:ram|memory)|memory usage)", RegexOptions.IgnoreCase)]
     private static partial Regex RamRegex();

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using Flux.Core;
 
@@ -6,6 +7,7 @@ namespace Flux.Windows.SystemIntegration;
 
 public sealed class WindowsProcessService : IProcessService
 {
+    private const uint WmClose = 0x0010;
     private static readonly TimeSpan GracefulCloseTimeout = TimeSpan.FromSeconds(2.5);
     private static readonly TimeSpan TerminationTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> ProtectedNames = new(StringComparer.OrdinalIgnoreCase)
@@ -146,15 +148,26 @@ public sealed class WindowsProcessService : IProcessService
         return result with { Name = "close_application", CallId = applicationName };
     }
 
-    public Task<ToolResult> CloseApplicationsAsync(
+    public async Task<ToolResult> CloseApplicationsAsync(
         IReadOnlyCollection<string> applicationNames,
         CancellationToken cancellationToken = default)
     {
-        var groups = ResolveGroups(applicationNames, out var unresolved);
-        return CloseGroupsAsync("close_applications", groups, unresolved, cancellationToken);
+        var explorerRequested = applicationNames.Any(IsExplorerAlias);
+        var groups = ResolveGroups(applicationNames.Where(name => !IsExplorerAlias(name)), out var unresolved);
+        var results = new List<ToolResult>();
+        if (groups.Count > 0 || unresolved.Count > 0)
+        {
+            results.Add(await CloseGroupsAsync("close_applications", groups, unresolved, cancellationToken));
+        }
+        if (explorerRequested)
+        {
+            results.Add(await CloseExplorerWindowsAsync("close_applications", cancellationToken));
+        }
+
+        return CombineCloseResults("close_applications", results);
     }
 
-    public Task<ToolResult> CloseAllExceptAsync(
+    public async Task<ToolResult> CloseAllExceptAsync(
         IReadOnlyCollection<string> exclusions,
         CancellationToken cancellationToken = default)
     {
@@ -165,20 +178,126 @@ public sealed class WindowsProcessService : IProcessService
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var unresolved = normalizedExclusions
-            .Where(exclusion => !groups.Any(group => IsExclusionMatch(exclusion, group)))
+            .Where(exclusion => !IsExplorerAlias(exclusion) && !groups.Any(group => IsExclusionMatch(exclusion, group)))
             .ToArray();
         if (unresolved.Length > 0)
         {
-            return Task.FromResult(new ToolResult(
+            return new ToolResult(
                 "close_applications_except",
                 "close_applications_except",
                 false,
-                $"Couldn't safely identify: {string.Join(", ", unresolved)}{Environment.NewLine}Nothing was closed."));
+                $"Couldn't safely identify: {string.Join(", ", unresolved)}{Environment.NewLine}Nothing was closed.");
         }
         var targets = groups
             .Where(group => !normalizedExclusions.Any(exclusion => IsExclusionMatch(exclusion, group)))
             .ToArray();
-        return CloseGroupsAsync("close_applications_except", targets, [], cancellationToken);
+        var results = new List<ToolResult>
+        {
+            await CloseGroupsAsync("close_applications_except", targets, [], cancellationToken)
+        };
+        if (!normalizedExclusions.Any(IsExplorerAlias))
+        {
+            results.Add(await CloseExplorerWindowsAsync("close_applications_except", cancellationToken));
+        }
+
+        return CombineCloseResults("close_applications_except", results);
+    }
+
+    private async Task<ToolResult> CloseExplorerWindowsAsync(
+        string toolName,
+        CancellationToken cancellationToken)
+    {
+        var windows = CaptureExplorerWindows();
+        if (windows.Count == 0)
+        {
+            return new ToolResult(toolName, toolName, true, "Nothing to close.");
+        }
+
+        foreach (var window in windows)
+        {
+            _ = PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        var deadline = Stopwatch.GetTimestamp() + (long)(GracefulCloseTimeout.TotalSeconds * Stopwatch.Frequency);
+        IReadOnlyList<IntPtr> remaining;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            remaining = windows.Where(IsWindow).ToArray();
+            if (remaining.Count == 0 || Stopwatch.GetTimestamp() >= deadline)
+            {
+                break;
+            }
+            await Task.Delay(50, cancellationToken);
+        }
+        while (true);
+
+        var closedCount = windows.Count - remaining.Count;
+        var lines = new List<string>();
+        if (closedCount == 1)
+        {
+            lines.Add("Closed: File Explorer");
+        }
+        else if (closedCount > 1)
+        {
+            lines.Add($"Closed {closedCount} File Explorer windows");
+        }
+        if (remaining.Count > 0)
+        {
+            lines.Add($"Couldn't close {remaining.Count} File Explorer window{(remaining.Count == 1 ? string.Empty : "s")}");
+        }
+
+        return new ToolResult(toolName, toolName, remaining.Count == 0, string.Join(Environment.NewLine, lines));
+    }
+
+    private IReadOnlyList<IntPtr> CaptureExplorerWindows()
+    {
+        var windows = new List<IntPtr>();
+        _ = EnumWindows((window, parameter) =>
+        {
+            var className = new StringBuilder(128);
+            if (GetClassName(window, className, className.Capacity) == 0 ||
+                className.ToString() is not ("CabinetWClass" or "ExploreWClass"))
+            {
+                return true;
+            }
+
+            _ = GetWindowThreadProcessId(window, out var processId);
+            try
+            {
+                using var process = Process.GetProcessById((int)processId);
+                if (process.SessionId == _currentSessionId &&
+                    string.Equals(process.ProcessName, "explorer", StringComparison.OrdinalIgnoreCase) &&
+                    (_allowedProcessIds is null || _allowedProcessIds.Contains(process.Id)))
+                {
+                    windows.Add(window);
+                }
+            }
+            catch
+            {
+            }
+
+            return true;
+        }, IntPtr.Zero);
+        return windows;
+    }
+
+    private static ToolResult CombineCloseResults(string toolName, IReadOnlyCollection<ToolResult> results)
+    {
+        if (results.Count == 0)
+        {
+            return new ToolResult(toolName, toolName, true, "Nothing to close.");
+        }
+
+        var output = results
+            .Select(result => result.Output)
+            .Where(text => !string.IsNullOrWhiteSpace(text) && !text.Equals("Nothing to close.", StringComparison.Ordinal))
+            .ToArray();
+        return new ToolResult(
+            toolName,
+            toolName,
+            results.All(result => result.Success),
+            output.Length == 0 ? "Nothing to close." : string.Join(Environment.NewLine, output));
     }
 
     private async Task<ToolResult> CloseGroupsAsync(
@@ -510,6 +629,31 @@ public sealed class WindowsProcessService : IProcessService
     }
 
     private static string Compact(string value) => value.Replace(" ", string.Empty, StringComparison.Ordinal);
+
+    private static bool IsExplorerAlias(string value) =>
+        Compact(NormalizeWords(value)) is
+            "explorer" or "fileexplorer" or "windowsexplorer" or
+            "explorerwindows" or "fileexplorerwindows" or "folderwindows";
+
+    private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr window, StringBuilder className, int maximumCount);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindow(IntPtr window);
 
     private static ToolResult Succeeded(object callId, string toolName, string verb, string name) =>
         new(callId.ToString() ?? toolName, toolName, true, $"{verb}: {name}");

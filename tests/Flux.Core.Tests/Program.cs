@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Release comparison normalizes assembly revisions", TestReleaseComparison),
     ("Malformed release tags are rejected", TestMalformedReleaseTag),
     ("Compound process actions route to AI tools", TestCompoundProcessAction),
+    ("Semantic process actions route to AI", TestSemanticProcessAction),
     ("Agent rejects unverified action claims", TestUnverifiedActionClaim),
     ("Agent streams text but buffers action requests", TestStreamingSafety)
 };
@@ -148,6 +149,24 @@ static async Task TestCompoundProcessAction()
     var single = await Router().RouteAsync("close Discord");
     Assert(single.Kind == RouteKind.ImmediateAction, "A single close should stay deterministic.");
     Assert(single.Action?.Target == "Discord", "The single application target was parsed incorrectly.");
+}
+
+static async Task TestSemanticProcessAction()
+{
+    var router = Router();
+    foreach (var request in new[]
+             {
+                 "close anything that isnt productive",
+                 "close all background apps",
+                 "close whatever I do not need"
+             })
+    {
+        var decision = await router.RouteAsync(request);
+        Assert(decision.Kind == RouteKind.Ai, $"Semantic close request was treated as a literal app: {request}");
+    }
+
+    var explicitApp = await router.RouteAsync("close Epic Games Launcher");
+    Assert(explicitApp.Kind == RouteKind.ImmediateAction, "A specific multi-word app name should stay deterministic.");
 }
 
 static async Task TestUnverifiedActionClaim()

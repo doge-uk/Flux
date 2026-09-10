@@ -73,7 +73,7 @@ public partial class MainWindow : Window
         _log = log;
 
         ResultsList.ItemsSource = _results;
-        _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
+        _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(55) };
         _searchTimer.Tick += SearchTimer_Tick;
         _hotkey.Pressed += (_, _) => Dispatcher.Invoke(ToggleLauncher);
     }
@@ -173,6 +173,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        _results.Clear();
+        _results.Add(CreateAiResult(QueryBox.Text.Trim()));
+        ShowResults(animateContent: false);
         _searchTimer.Start();
     }
 
@@ -201,6 +204,8 @@ public partial class MainWindow : Window
                 {
                     _results.Add(result);
                 }
+
+                _results.Add(CreateAiResult(query));
             }
             else if (decision.Kind == RouteKind.ImmediateAction && decision.Action is not null)
             {
@@ -214,13 +219,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                _results.Add(new SearchResult(
-                    "command:ai",
-                    "Ask the local model",
-                    "Use AI only for interpretation and planning",
-                    SearchResultKind.Ai,
-                    1,
-                    new FluxAction(FluxActionType.AskAi, query, PermissionLevel.ReadOnly, "Ask Flux")));
+                _results.Add(CreateAiResult(query));
             }
 
             ShowResults();
@@ -598,7 +597,15 @@ public partial class MainWindow : Window
         ShowStatus("Cancelled", "Nothing was changed.", "SAFE");
     }
 
-    private void ShowResults()
+    private static SearchResult CreateAiResult(string query) => new(
+        "command:ai",
+        "Ask Flux with AI",
+        "Interpret this request with the configured AI model",
+        SearchResultKind.Ai,
+        1,
+        new FluxAction(FluxActionType.AskAi, query, PermissionLevel.ReadOnly, "Ask Flux"));
+
+    private void ShowResults(bool animateContent = true)
     {
         BusyPanel.Visibility = Visibility.Collapsed;
         StatusPanel.Visibility = Visibility.Collapsed;
@@ -608,7 +615,10 @@ public partial class MainWindow : Window
         Footer.Visibility = Visibility.Visible;
         ModeLabel.Text = _results.FirstOrDefault()?.Kind == SearchResultKind.Ai ? "LOCAL AI ON ENTER" : "DETERMINISTIC";
         ResultsList.SelectedIndex = _results.Count > 0 ? 0 : -1;
-        AnimateElement(ResultsList);
+        if (animateContent)
+        {
+            AnimateElement(ResultsList);
+        }
         AnimateHeight(Math.Min(650, 156 + Math.Max(82, _results.Count * 68)));
     }
 
