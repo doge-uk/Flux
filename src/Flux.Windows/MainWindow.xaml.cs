@@ -735,6 +735,11 @@ public partial class MainWindow : Window
         _pendingAction = null;
         _pendingTools = Array.Empty<PendingToolCall>();
 
+        if (directAction is null && toolCalls.Count == 0)
+        {
+            return;
+        }
+
         if (directAction is not null)
         {
             await ExecuteActionAsync(directAction);
