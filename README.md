@@ -74,14 +74,6 @@ git push origin v0.1.0
 
 The Windows workflow builds and tests Flux, embeds the actual GitHub repository and tag version, and publishes the portable ZIP as the release asset.
 
-## Brand assets
-
-The supplied transparent and black-backed Flux marks are preserved under `src/Flux.Windows/Assets/Source`. `FluxMark.png` is the cropped transparent in-app mark; `Flux.ico` contains 16–256 px Windows icon sizes and is embedded into the executable, tray, and installer. Rebuild the derived assets without altering the originals with:
-
-```powershell
-dotnet run --project tools/Flux.AssetBuilder -- <transparent.png> <black.png> src/Flux.Windows/Assets
-```
-
 ## Project layout
 
 - `src/Flux.Core` — routing, search scoring, provider/tool contracts, permission model, agent safety gate
