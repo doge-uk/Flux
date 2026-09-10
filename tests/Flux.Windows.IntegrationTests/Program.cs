@@ -9,6 +9,7 @@ using Flux.Windows.Ai;
 using Flux.Windows.Configuration;
 using Flux.Windows.Search;
 using Flux.Windows.SystemIntegration;
+using Flux.Windows.Tools;
 using Flux.Windows.Updates;
 
 await TestUpdateIntegrityAsync();
@@ -17,6 +18,7 @@ TestMalformedToolCallParsing();
 TestMarkdownRendering();
 TestEndpointValidation();
 await TestFileSearchBudgetAsync();
+await TestPowerShellExecutionSafetyAsync();
 
 if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
 {
@@ -99,6 +101,34 @@ finally
     KillIfRunning(powershell);
     KillIfRunning(pwsh);
     KillIfRunning(backgroundPwsh);
+}
+
+static async Task TestPowerShellExecutionSafetyAsync()
+{
+    var bounded = await PowerShellCommandRunner.RunAsync(
+        "[Console]::Out.Write('x' * 40000)",
+        timeout: TimeSpan.FromSeconds(5));
+    Assert(bounded.Success, "A successful PowerShell command was reported as failed.");
+    Assert(bounded.Output.Length <= 32_800 && bounded.Output.EndsWith("[Output truncated]", StringComparison.Ordinal),
+        "PowerShell output was not safely bounded.");
+
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+    var stopwatch = Stopwatch.StartNew();
+    try
+    {
+        await PowerShellCommandRunner.RunAsync(
+            "Start-Sleep -Seconds 10",
+            cancellation.Token,
+            TimeSpan.FromSeconds(15));
+        throw new InvalidOperationException("A cancelled PowerShell command completed normally.");
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+    }
+
+    Assert(stopwatch.Elapsed < TimeSpan.FromSeconds(4),
+        "Cancelling PowerShell did not promptly terminate its process tree.");
+    Console.WriteLine("PASS  PowerShell execution is cancellable and output-bounded");
 }
 
 static async Task TestLocalModelProtocolAsync(string model)

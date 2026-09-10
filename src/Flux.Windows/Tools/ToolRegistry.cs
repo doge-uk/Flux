@@ -350,23 +350,8 @@ public sealed class ToolRegistry : IToolRegistry
         public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
         {
             var command = call.Arguments.GetProperty("command").GetString() ?? string.Empty;
-            var startInfo = new ProcessStartInfo("powershell.exe")
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            startInfo.ArgumentList.Add("-NoProfile");
-            startInfo.ArgumentList.Add("-NonInteractive");
-            startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add(command);
-            using var process = Process.Start(startInfo)!;
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            var output = (await outputTask) + (await errorTask);
-            return new ToolResult(call.Id, Definition.Name, process.ExitCode == 0, output.Trim());
+            var result = await PowerShellCommandRunner.RunAsync(command, cancellationToken);
+            return new ToolResult(call.Id, Definition.Name, result.Success, result.Output);
         }
     }
 }

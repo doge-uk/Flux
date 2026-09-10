@@ -41,6 +41,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _particleCleanupTimer;
     private CancellationTokenSource? _searchCancellation;
     private CancellationTokenSource? _agentCancellation;
+    private CancellationTokenSource? _toolCancellation;
     private FluxAction? _pendingAction;
     private IReadOnlyList<PendingToolCall> _pendingTools = Array.Empty<PendingToolCall>();
     private int _historyIndex = -1;
@@ -49,6 +50,7 @@ public partial class MainWindow : Window
     private bool _isHiding;
     private int _animationGeneration;
     private int _agentGeneration;
+    private int _toolGeneration;
     private string _aiModeLabel = "LOCAL AI";
     private string? _resolvedQuery;
 
@@ -622,7 +624,7 @@ public partial class MainWindow : Window
                 if (!_settings.ConfirmBeforeClosingApplications && result.PendingActions.All(IsApplicationCloseTool))
                 {
                     ShowBusy("EXECUTING");
-                    ShowToolResults(await ExecutePendingToolsAsync(result.PendingActions));
+                    ShowToolResults(await ExecutePendingToolsAsync(result.PendingActions, cancellation.Token));
                     return;
                 }
 
@@ -686,11 +688,36 @@ public partial class MainWindow : Window
             return;
         }
 
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = _toolCancellation;
+        _toolCancellation = cancellation;
+        previousCancellation?.Cancel();
+        var generation = ++_toolGeneration;
         ShowBusy("EXECUTING");
-        ShowToolResults(await ExecutePendingToolsAsync(toolCalls));
+        try
+        {
+            var results = await ExecutePendingToolsAsync(toolCalls, cancellation.Token);
+            if (IsCurrentToolRequest(cancellation, generation))
+            {
+                ShowToolResults(results);
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_toolCancellation, cancellation))
+            {
+                _toolCancellation = null;
+            }
+            cancellation.Dispose();
+        }
     }
 
-    private async Task<IReadOnlyList<ToolResult>> ExecutePendingToolsAsync(IReadOnlyList<PendingToolCall> toolCalls)
+    private async Task<IReadOnlyList<ToolResult>> ExecutePendingToolsAsync(
+        IReadOnlyList<PendingToolCall> toolCalls,
+        CancellationToken cancellationToken)
     {
         var results = new List<ToolResult>();
         foreach (var pending in toolCalls)
@@ -703,7 +730,11 @@ public partial class MainWindow : Window
 
             try
             {
-                results.Add(await tool.ExecuteAsync(pending.Call));
+                results.Add(await tool.ExecuteAsync(pending.Call, cancellationToken));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception exception)
             {
@@ -713,6 +744,12 @@ public partial class MainWindow : Window
         }
         return results;
     }
+
+    private bool IsCurrentToolRequest(CancellationTokenSource cancellation, int generation) =>
+        ReferenceEquals(_toolCancellation, cancellation) &&
+        generation == _toolGeneration &&
+        !cancellation.IsCancellationRequested &&
+        IsVisible && !_isHiding;
 
     private bool ShouldConfirm(FluxAction action) =>
         action.Permission >= PermissionLevel.Disruptive &&
@@ -1102,6 +1139,8 @@ public partial class MainWindow : Window
         _resolvedQuery = null;
         _agentGeneration++;
         _agentCancellation?.Cancel();
+        _toolGeneration++;
+        _toolCancellation?.Cancel();
     }
 
 }
