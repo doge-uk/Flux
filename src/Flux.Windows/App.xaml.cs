@@ -15,7 +15,11 @@ namespace Flux.Windows;
 
 public partial class App : System.Windows.Application
 {
+    private const string SingleInstanceName = "Local\\Flux.Desktop.SingleInstance";
+    private const string ActivationEventName = "Local\\Flux.Desktop.Activate";
     private Mutex? _singleInstance;
+    private EventWaitHandle? _activationEvent;
+    private RegisteredWaitHandle? _activationRegistration;
     private TrayService? _tray;
     private AiProviderRouter? _provider;
     private MainWindow? _window;
@@ -30,9 +34,15 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
-        _singleInstance = new Mutex(true, "Local\\Flux.Desktop.SingleInstance", out var isFirst);
+        _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName);
+        _singleInstance = new Mutex(true, SingleInstanceName, out var isFirst);
         if (!isFirst)
         {
+            _activationEvent.Set();
+            _activationEvent.Dispose();
+            _activationEvent = null;
+            _singleInstance.Dispose();
+            _singleInstance = null;
             Shutdown();
             return;
         }
@@ -65,6 +75,20 @@ public partial class App : System.Windows.Application
             router, agent, _provider, tools, processes, systemInfo, history,
             applications, settings, _settingsService, _startup, hotkey, log);
         MainWindow = _window;
+        _activationRegistration = ThreadPool.RegisterWaitForSingleObject(
+            _activationEvent,
+            (_, timedOut) =>
+            {
+                if (timedOut || Dispatcher.HasShutdownStarted)
+                {
+                    return;
+                }
+
+                _ = Dispatcher.BeginInvoke(new Action(() => _window?.ShowLauncher()));
+            },
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: false);
 
         _tray = new TrayService(
             () => _window.ShowLauncher(),
@@ -182,6 +206,10 @@ public partial class App : System.Windows.Application
         _tray?.Dispose();
         _provider?.Dispose();
         _updates?.Dispose();
+        _activationRegistration?.Unregister(null);
+        _activationRegistration = null;
+        _activationEvent?.Dispose();
+        _activationEvent = null;
         _singleInstance?.Dispose();
         Shutdown();
     }

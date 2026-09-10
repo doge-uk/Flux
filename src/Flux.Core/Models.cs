@@ -75,6 +75,18 @@ public sealed record RouteDecision(
 
 public sealed record ApplicationEntry(string Name, string Target, string Source, int UsageCount = 0);
 
+public enum ProcessCategory
+{
+    Unknown,
+    UserApplication,
+    BackgroundApplication,
+    HelperProcess,
+    LauncherOrUpdater,
+    WindowsProcess,
+    Service,
+    OtherSession
+}
+
 public sealed record ProcessSnapshot(
     int Id,
     string Name,
@@ -85,7 +97,9 @@ public sealed record ProcessSnapshot(
     bool IsUserApplication,
     bool IsProtected,
     string? ExecutablePath = null,
-    string? DisplayName = null)
+    string? DisplayName = null,
+    ProcessCategory Category = ProcessCategory.Unknown,
+    bool HasVisibleWindow = false)
 {
     public string FriendlyName => string.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName;
 }

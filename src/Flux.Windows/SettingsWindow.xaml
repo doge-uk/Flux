@@ -4,7 +4,7 @@
         Title="Flux Settings" Width="680" Height="740" ResizeMode="NoResize"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         WindowStartupLocation="CenterOwner" Foreground="#F4F6FA"
-        Loaded="Window_Loaded" Opacity="0">
+        Loaded="Window_Loaded" Closed="Window_Closed" PreviewKeyDown="Window_PreviewKeyDown" Opacity="0">
     <Window.Resources>
         <Style TargetType="TextBlock">
             <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI" />
@@ -259,7 +259,7 @@
                                            Foreground="#777E8C" FontSize="12" TextWrapping="Wrap" Margin="0,-7,0,4" />
 
                                 <StackPanel Orientation="Horizontal">
-                                    <Button Content="Test local connection" Click="TestLocal_Click" />
+                                    <Button x:Name="TestLocalButton" Content="Test local connection" Click="TestLocal_Click" />
                                     <TextBlock x:Name="LocalStatus" Foreground="#999FAC" VerticalAlignment="Center"
                                                Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="310" />
                                 </StackPanel>

@@ -142,6 +142,8 @@ public sealed class ToolRegistry : IToolRegistry
                 cpu_percent = Math.Round(item.CpuPercent, 1),
                 responding = item.Responding,
                 user_app = item.IsUserApplication,
+                process_category = item.Category.ToString(),
+                visible_window = item.HasVisibleWindow,
                 protected_process = item.IsProtected
             });
             return new ToolResult(call.Id, Definition.Name, true, JsonSerializer.Serialize(compact));

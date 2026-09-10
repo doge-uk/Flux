@@ -22,6 +22,7 @@ public partial class SettingsWindow : Window
         new("Ctrl + Alt + Space", 0x0003, 0x20)
     ];
     private bool _closing;
+    private CancellationTokenSource? _probeCancellation;
 
     public SettingsWindow(SettingsService settingsService, StartupManager startup, ICommandHistory history)
     {
@@ -49,25 +50,47 @@ public partial class SettingsWindow : Window
 
     private async void TestLocal_Click(object sender, RoutedEventArgs e)
     {
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = _probeCancellation;
+        _probeCancellation = cancellation;
+        previousCancellation?.Cancel();
+        TestLocalButton.IsEnabled = false;
         LocalStatus.Text = "Checking…";
-        var result = await _discovery.ProbeAsync(LocalEndpointBox.Text);
-        LocalStatus.Text = result.Message;
-        LocalStatus.Foreground = result.Available
-            ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(91, 207, 145))
-            : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 140, 120));
-
-        if (result.Models.Count > 0)
+        try
         {
-            var current = LocalModelBox.Text;
-            var currentLarge = LocalLargeModelBox.Text;
-            LocalModelBox.ItemsSource = result.Models;
-            LocalLargeModelBox.ItemsSource = result.Models;
-            LocalModelBox.Text = result.Models.Contains(current, StringComparer.OrdinalIgnoreCase)
-                ? current
-                : result.Models[0];
-            LocalLargeModelBox.Text = result.Models.Contains(currentLarge, StringComparer.OrdinalIgnoreCase)
-                ? currentLarge
-                : result.Models.FirstOrDefault(model => model.Contains("9b", StringComparison.OrdinalIgnoreCase)) ?? result.Models[0];
+            var result = await _discovery.ProbeAsync(LocalEndpointBox.Text, cancellation.Token);
+            if (!ReferenceEquals(_probeCancellation, cancellation) || cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            LocalStatus.Text = result.Message;
+            LocalStatus.Foreground = result.Available
+                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(91, 207, 145))
+                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 140, 120));
+
+            if (result.Models.Count > 0)
+            {
+                var current = LocalModelBox.Text;
+                var currentLarge = LocalLargeModelBox.Text;
+                LocalModelBox.ItemsSource = result.Models;
+                LocalLargeModelBox.ItemsSource = result.Models;
+                LocalModelBox.Text = result.Models.Contains(current, StringComparer.OrdinalIgnoreCase)
+                    ? current
+                    : result.Models[0];
+                LocalLargeModelBox.Text = result.Models.Contains(currentLarge, StringComparer.OrdinalIgnoreCase)
+                    ? currentLarge
+                    : result.Models.FirstOrDefault(model => model.Contains("9b", StringComparison.OrdinalIgnoreCase)) ?? result.Models[0];
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_probeCancellation, cancellation))
+            {
+                _probeCancellation = null;
+                TestLocalButton.IsEnabled = true;
+            }
+            cancellation.Dispose();
         }
     }
 
@@ -154,6 +177,15 @@ public partial class SettingsWindow : Window
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        if (!SystemParameters.ClientAreaAnimation)
+        {
+            Opacity = 1;
+            SettingsScale.ScaleX = 1;
+            SettingsScale.ScaleY = 1;
+            SettingsTranslate.Y = 0;
+            return;
+        }
+
         SettingsScale.ScaleX = 0.975;
         SettingsScale.ScaleY = 0.975;
         SettingsTranslate.Y = 8;
@@ -167,6 +199,24 @@ public partial class SettingsWindow : Window
             new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(170)) { EasingFunction = easing });
     }
 
+    private void Window_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        CloseWithResult(false);
+    }
+
+    private void Window_Closed(object? sender, EventArgs e)
+    {
+        var cancellation = _probeCancellation;
+        _probeCancellation = null;
+        cancellation?.Cancel();
+    }
+
     private void CloseWithResult(bool result)
     {
         if (_closing)
@@ -175,6 +225,12 @@ public partial class SettingsWindow : Window
         }
 
         _closing = true;
+        if (!SystemParameters.ClientAreaAnimation)
+        {
+            DialogResult = result;
+            return;
+        }
+
         var easing = new CubicEase { EasingMode = EasingMode.EaseIn };
         var opacity = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(105)) { EasingFunction = easing };
         opacity.Completed += (_, _) => DialogResult = result;

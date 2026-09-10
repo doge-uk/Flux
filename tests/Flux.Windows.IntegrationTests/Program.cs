@@ -1,14 +1,19 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Flux.Core;
+using Flux.Windows;
 using Flux.Windows.Ai;
 using Flux.Windows.Configuration;
 using Flux.Windows.SystemIntegration;
 using Flux.Windows.Updates;
 
 await TestUpdateIntegrityAsync();
+TestProcessClassification();
+TestMalformedToolCallParsing();
+TestMarkdownRendering();
 
 if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
 {
@@ -53,12 +58,13 @@ if (args.Contains("--model-only", StringComparer.OrdinalIgnoreCase))
 
 var powershell = StartWindowProcess("powershell.exe", ignoreClose: true);
 var pwsh = StartWindowProcess("pwsh.exe", ignoreClose: false);
+var backgroundPwsh = StartBackgroundProcess("pwsh.exe");
 try
 {
     await WaitForWindowAsync(powershell);
     await WaitForWindowAsync(pwsh);
 
-    var service = new WindowsProcessService([powershell.Id, pwsh.Id]);
+    var service = new WindowsProcessService([powershell.Id, pwsh.Id, backgroundPwsh.Id]);
     var refused = await service.CloseAllExceptAsync(["definitely-not-a-running-app"]);
     Assert(!refused.Success, "An unresolved exclusion should stop the operation.");
     Assert(!HasExited(powershell.Id) && !HasExited(pwsh.Id),
@@ -74,7 +80,8 @@ try
     var closeNamed = await service.CloseApplicationAsync("pwsh");
     Assert(closeNamed.Success, closeNamed.Output);
     Assert(await WaitForGoneAsync(pwsh.Id), "pwsh was reported closed but is still running.");
-    Console.WriteLine("PASS  Close named application verifies the process exited");
+    Assert(await WaitForGoneAsync(backgroundPwsh.Id), "The windowless pwsh sibling was left running.");
+    Console.WriteLine("PASS  Close named application verifies visible and windowless sibling processes exited");
 
     var model = Environment.GetEnvironmentVariable("FLUX_TEST_MODEL");
     if (!string.IsNullOrWhiteSpace(model))
@@ -88,6 +95,7 @@ finally
 {
     KillIfRunning(powershell);
     KillIfRunning(pwsh);
+    KillIfRunning(backgroundPwsh);
 }
 
 static async Task TestLocalModelProtocolAsync(string model)
@@ -173,6 +181,137 @@ static Process StartWindowProcess(string executable, bool ignoreClose)
     startInfo.ArgumentList.Add("-Sta");
     startInfo.ArgumentList.Add("-Command");
     startInfo.ArgumentList.Add("Add-Type -AssemblyName System.Windows.Forms,System.Drawing;" + script);
+    return Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {executable}.");
+}
+
+static void TestProcessClassification()
+{
+    var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+    var discord = Path.Combine(local, "Discord", "app-1.0.0", "Discord.exe");
+
+    Assert(ProcessClassifier.Classify("Discord", discord, true, false, false) == ProcessCategory.BackgroundApplication,
+        "A user-installed background application was not recognized.");
+    Assert(ProcessClassifier.Classify("DiscordUpdate", Path.Combine(local, "Discord", "Update.exe"), true, false, false) == ProcessCategory.LauncherOrUpdater,
+        "An application updater was not separated from the application.");
+    Assert(ProcessClassifier.Classify("node", Path.Combine(local, "Example", "runtimes", "node.exe"), true, false, false) == ProcessCategory.HelperProcess,
+        "A runtime host was not classified as a helper.");
+    Assert(ProcessClassifier.Classify("svchost", Path.Combine(windows, "System32", "svchost.exe"), true, false, true) == ProcessCategory.WindowsProcess,
+        "A protected Windows process was not classified as Windows-owned.");
+    Assert(ProcessClassifier.Classify("steamwebhelper", @"C:\Program Files (x86)\Steam\bin\steamwebhelper.exe", true, true, false) == ProcessCategory.HelperProcess,
+        "A helper with a visible utility window was promoted to a user application.");
+    Assert(ProcessClassifier.Classify("steam", @"C:\Program Files (x86)\Steam\steam.exe", true, false, false) == ProcessCategory.BackgroundApplication,
+        "A tray-only application installed under Program Files was not recognized.");
+    Assert(ProcessClassifier.Classify("nvcontainer", @"C:\Program Files\NVIDIA Corporation\NvContainer\nvcontainer.exe", true, false, false) == ProcessCategory.HelperProcess,
+        "A background container was promoted to an application.");
+    Assert(ProcessClassifier.Classify("ExampleService", @"C:\Program Files\Example\ExampleService.exe", false, false, false, null, true) == ProcessCategory.Service,
+        "A session-zero service was not recognized.");
+    Assert(ProcessClassifier.Classify("Discord", discord, false, false, false) == ProcessCategory.OtherSession,
+        "A process in another session was treated as the current user's application.");
+    var windowsAppsExecutable = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        "WindowsApps", "Example.App_1.0_x64__publisher", "app", "Example.exe");
+    var windowsAppsFamily = WindowsProcessService.TryGetApplicationFamilyRoot(windowsAppsExecutable);
+    Assert(windowsAppsFamily is not null && windowsAppsFamily.EndsWith(
+            Path.Combine("WindowsApps", "Example.App_1.0_x64__publisher"), StringComparison.OrdinalIgnoreCase),
+        "WindowsApps packages were grouped at an unsafe shared-container boundary.");
+    var commonFilesExecutable = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        "Common Files", "Example Vendor", "Agent.exe");
+    var commonFilesFamily = WindowsProcessService.TryGetApplicationFamilyRoot(commonFilesExecutable);
+    Assert(commonFilesFamily is not null && commonFilesFamily.EndsWith(
+            Path.Combine("Common Files", "Example Vendor"), StringComparison.OrdinalIgnoreCase),
+        "Common Files applications were grouped at an unsafe shared-container boundary.");
+    Console.WriteLine("PASS  Process classifier separates apps, helpers, updaters and Windows processes");
+}
+
+static void TestMalformedToolCallParsing()
+{
+    using var document = JsonDocument.Parse("""
+        {
+          "tool_calls": [
+            { "id": "broken-arguments", "function": { "name": "close_application", "arguments": "{" } },
+            { "id": "missing-name", "function": { "arguments": "{}" } },
+            null
+          ]
+        }
+        """);
+    var calls = CompatibleChatProvider.ParseToolCalls(document.RootElement);
+    Assert(calls.Count == 1 && calls[0].Name == "close_application",
+        "A malformed tool call corrupted the complete tool response.");
+    Assert(calls[0].Arguments.ValueKind == JsonValueKind.Object && !calls[0].Arguments.EnumerateObject().Any(),
+        "Malformed tool arguments were not replaced with a safe empty object.");
+    Console.WriteLine("PASS  Malformed model tool calls degrade safely without faking execution");
+}
+
+static void TestMarkdownRendering()
+{
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try
+        {
+            var target = new System.Windows.Controls.TextBlock();
+            MarkdownTextRenderer.Render(target, "## Result\n- **Closed:** `Discord`\n> Verified");
+            var visibleText = ReadInlineText(target.Inlines);
+            Assert(visibleText.Contains("Result", StringComparison.Ordinal) &&
+                visibleText.Contains("Closed:", StringComparison.Ordinal) &&
+                visibleText.Contains("Discord", StringComparison.Ordinal) &&
+                visibleText.Contains("Verified", StringComparison.Ordinal),
+                "Formatted response content was lost while creating WPF inlines.");
+            Assert(!visibleText.Contains("**", StringComparison.Ordinal) &&
+                !visibleText.Contains("##", StringComparison.Ordinal) &&
+                !visibleText.Contains('`'),
+                "Markdown control characters leaked into the rendered response.");
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (failure is not null)
+    {
+        throw failure;
+    }
+    Console.WriteLine("PASS  Markdown responses render as native WPF formatting");
+}
+
+static string ReadInlineText(System.Windows.Documents.InlineCollection inlines)
+{
+    var builder = new StringBuilder();
+    foreach (var inline in inlines)
+    {
+        switch (inline)
+        {
+            case System.Windows.Documents.Run run:
+                builder.Append(run.Text);
+                break;
+            case System.Windows.Documents.LineBreak:
+                builder.AppendLine();
+                break;
+            case System.Windows.Documents.Span span:
+                builder.Append(ReadInlineText(span.Inlines));
+                break;
+        }
+    }
+    return builder.ToString();
+}
+
+static Process StartBackgroundProcess(string executable)
+{
+    var startInfo = new ProcessStartInfo(executable)
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        WindowStyle = ProcessWindowStyle.Hidden
+    };
+    startInfo.ArgumentList.Add("-NoProfile");
+    startInfo.ArgumentList.Add("-NonInteractive");
+    startInfo.ArgumentList.Add("-Command");
+    startInfo.ArgumentList.Add("Start-Sleep -Seconds 60");
     return Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {executable}.");
 }
 

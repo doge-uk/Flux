@@ -18,6 +18,11 @@ public sealed class WindowsProcessService : IProcessService
         "MsMpEng", "explorer", "Flux", "audiodg", "conhost", "dllhost", "LogonUI",
         "WmiPrvSE", "SearchHost", "SearchIndexer", "RuntimeBroker", "spoolsv", "ctfmon"
     };
+    private static readonly HashSet<string> FamilyContainerDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Adobe", "Apple", "Common Files", "Google", "Microsoft", "NVIDIA Corporation", "OpenAI",
+        "Packages", "Programs", "WindowsApps"
+    };
 
     private readonly HashSet<int>? _allowedProcessIds;
     private readonly int _currentSessionId;
@@ -133,9 +138,8 @@ public sealed class WindowsProcessService : IProcessService
             results.Add(await TerminateAsync(process.Id, cancellationToken));
         }
 
-        var remains = CaptureApplicationGroups(cancellationToken)
-            .Any(group => group.IdentityKey.Equals(target.IdentityKey, StringComparison.OrdinalIgnoreCase));
-        return results.All(result => result.Success) && !remains
+        var fullyTerminated = await TerminateRemainingGroupProcessesAsync(target, cancellationToken);
+        return fullyTerminated
             ? Succeeded(applicationName, "terminate_application", "Terminated", target.DisplayName)
             : Failed(applicationName, "terminate_application", "terminate", target.DisplayName);
     }
@@ -313,26 +317,22 @@ public sealed class WindowsProcessService : IProcessService
 
         var attempts = await Task.WhenAll(groups.Select(async group =>
         {
-            var results = new List<ToolResult>();
             foreach (var process in group.Processes)
             {
-                results.Add(await CloseAsync(process.Id, cancellationToken));
+                _ = await CloseAsync(process.Id, cancellationToken);
             }
-            return (Group: group, AllSucceeded: results.All(result => result.Success));
+            return (Group: group, AllSucceeded: await TerminateRemainingGroupProcessesAsync(group, cancellationToken));
         }));
 
-        var remainingKeys = CaptureApplicationGroups(cancellationToken)
-            .Select(group => group.IdentityKey)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var closed = attempts
-            .Where(item => item.AllSucceeded && !remainingKeys.Contains(item.Group.IdentityKey))
+            .Where(item => item.AllSucceeded)
             .Select(item => item.Group.DisplayName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
         var failed = initiallyFailed
             .Concat(attempts
-                .Where(item => !item.AllSucceeded || remainingKeys.Contains(item.Group.IdentityKey))
+                .Where(item => !item.AllSucceeded)
                 .Select(item => item.Group.DisplayName))
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -344,6 +344,106 @@ public sealed class WindowsProcessService : IProcessService
             toolName,
             failed.Length == 0,
             FormatSummary(closed, failed));
+    }
+
+    private async Task<bool> TerminateRemainingGroupProcessesAsync(
+        ApplicationGroup group,
+        CancellationToken cancellationToken)
+    {
+        // A visible Electron process may be a child of a windowless parent. Killing its
+        // process tree therefore does not guarantee that sibling/tray processes exit.
+        // Only expand a group when it has an exact executable path identity; never sweep
+        // background processes using a display-name match.
+        if (!group.IdentityKey.StartsWith("path:", StringComparison.OrdinalIgnoreCase) &&
+            !group.IdentityKey.StartsWith("family:", StringComparison.OrdinalIgnoreCase))
+        {
+            return group.Processes.All(process => IsProcessGone(process.Id));
+        }
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var remaining = CaptureMatchingGroupProcessIds(group.IdentityKey);
+            if (remaining.Count == 0)
+            {
+                return true;
+            }
+
+            foreach (var processId in remaining)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await TerminateExactGroupProcessAsync(processId, group.IdentityKey, cancellationToken);
+            }
+
+            await Task.Delay(100, cancellationToken);
+        }
+
+        return CaptureMatchingGroupProcessIds(group.IdentityKey).Count == 0;
+    }
+
+    private IReadOnlyList<int> CaptureMatchingGroupProcessIds(string identityKey)
+    {
+        var result = new List<int>();
+        foreach (var process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                try
+                {
+                    if ((_allowedProcessIds is not null && !_allowedProcessIds.Contains(process.Id)) ||
+                        process.Id == Environment.ProcessId || process.HasExited ||
+                        process.SessionId != _currentSessionId || process.SessionId == 0 ||
+                        IsProtected(process.ProcessName))
+                    {
+                        continue;
+                    }
+
+                    var executablePath = TryGetExecutablePath(process);
+                    if (executablePath is not null && IsIdentityMatch(identityKey, executablePath))
+                    {
+                        result.Add(process.Id);
+                    }
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private async Task TerminateExactGroupProcessAsync(
+        int processId,
+        string identityKey,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var executablePath = TryGetExecutablePath(process);
+            if (process.Id == Environment.ProcessId || process.HasExited ||
+                process.SessionId != _currentSessionId || process.SessionId == 0 ||
+                IsProtected(process.ProcessName) || executablePath is null ||
+                !IsIdentityMatch(identityKey, executablePath))
+            {
+                return;
+            }
+
+            process.Kill(entireProcessTree: true);
+            _ = await WaitForExitAsync(process, TerminationTimeout, cancellationToken);
+        }
+        catch (ArgumentException)
+        {
+            // The process exited between discovery and termination.
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between discovery and termination.
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Verification below will report the application as still running.
+        }
     }
 
     private IReadOnlyList<ApplicationGroup> ResolveGroups(
@@ -407,7 +507,7 @@ public sealed class WindowsProcessService : IProcessService
         CancellationToken cancellationToken)
     {
         var processorCount = Math.Max(1, Environment.ProcessorCount);
-        var results = new List<ProcessSnapshot>();
+        var captured = new List<(ProcessSnapshot Snapshot, bool IsCurrentSession, bool IsServiceSession)>();
         foreach (var process in Process.GetProcesses())
         {
             using (process)
@@ -433,17 +533,19 @@ public sealed class WindowsProcessService : IProcessService
 
                     var title = process.MainWindowTitle;
                     var path = TryGetExecutablePath(process);
-                    results.Add(new ProcessSnapshot(
+                    captured.Add((new ProcessSnapshot(
                         process.Id,
                         name,
                         string.IsNullOrWhiteSpace(title) ? null : title,
                         process.WorkingSet64,
                         cpu,
                         process.Responding,
-                        hasWindow && inCurrentSession && !protectedProcess,
+                        false,
                         protectedProcess,
                         path,
-                        GetDisplayName(process, path)));
+                        GetDisplayName(process, path),
+                        ProcessCategory.Unknown,
+                        hasWindow), inCurrentSession, process.SessionId == 0));
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
                 {
@@ -451,22 +553,109 @@ public sealed class WindowsProcessService : IProcessService
             }
         }
 
-        return results;
+        var visiblePaths = captured
+            .Where(item => item.IsCurrentSession && item.Snapshot.HasVisibleWindow && !item.Snapshot.IsProtected &&
+                !string.IsNullOrWhiteSpace(item.Snapshot.ExecutablePath))
+            .Select(item => Path.GetFullPath(item.Snapshot.ExecutablePath!))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return captured.Select(item =>
+        {
+            var category = ProcessClassifier.Classify(
+                item.Snapshot.Name,
+                item.Snapshot.ExecutablePath,
+                item.IsCurrentSession,
+                item.Snapshot.HasVisibleWindow,
+                item.Snapshot.IsProtected,
+                visiblePaths,
+                item.IsServiceSession);
+            return item.Snapshot with
+            {
+                Category = category,
+                IsUserApplication = category is ProcessCategory.UserApplication or ProcessCategory.BackgroundApplication
+            };
+        }).ToArray();
     }
 
     private IReadOnlyList<ApplicationGroup> CaptureApplicationGroups(CancellationToken cancellationToken) =>
         CaptureSnapshots(null, 1, cancellationToken)
             .Where(process => process.IsUserApplication && !process.IsProtected)
-            .GroupBy(
-                process => string.IsNullOrWhiteSpace(process.ExecutablePath)
-                    ? $"name:{process.Name}"
-                    : $"path:{process.ExecutablePath}",
-                StringComparer.OrdinalIgnoreCase)
+            .GroupBy(GetApplicationIdentityKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => new ApplicationGroup(
                 group.Key,
                 ChooseDisplayName(group),
                 group.OrderBy(process => process.Id).ToArray()))
             .ToArray();
+
+    private static string GetApplicationIdentityKey(ProcessSnapshot process)
+    {
+        if (string.IsNullOrWhiteSpace(process.ExecutablePath))
+        {
+            return $"name:{process.Name}";
+        }
+
+        var fullPath = Path.GetFullPath(process.ExecutablePath);
+        var familyRoot = TryGetApplicationFamilyRoot(fullPath);
+        return familyRoot is null ? $"path:{fullPath}" : $"family:{familyRoot}";
+    }
+
+    private static bool IsIdentityMatch(string identityKey, string executablePath)
+    {
+        var fullPath = Path.GetFullPath(executablePath);
+        if (identityKey.StartsWith("path:", StringComparison.OrdinalIgnoreCase))
+        {
+            return identityKey.AsSpan(5).Equals(fullPath, StringComparison.OrdinalIgnoreCase);
+        }
+        if (!identityKey.StartsWith("family:", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var familyRoot = identityKey[7..].TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(familyRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string? TryGetApplicationFamilyRoot(string executablePath)
+    {
+        var roots = new[]
+        {
+            (Path: Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Skip: "Programs"),
+            (Path: Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), Skip: string.Empty),
+            (Path: Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Skip: string.Empty),
+            (Path: Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), Skip: string.Empty)
+        };
+
+        foreach (var root in roots.Where(item => !string.IsNullOrWhiteSpace(item.Path)))
+        {
+            var normalizedRoot = Path.GetFullPath(root.Path).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!executablePath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var relativeParts = executablePath[normalizedRoot.Length..]
+                .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+            if (relativeParts.Length < 2)
+            {
+                return null;
+            }
+
+            var depth = 1;
+            if ((!string.IsNullOrEmpty(root.Skip) && relativeParts[0].Equals(root.Skip, StringComparison.OrdinalIgnoreCase)) ||
+                FamilyContainerDirectories.Contains(relativeParts[0]))
+            {
+                depth = 2;
+            }
+            if (relativeParts.Length <= depth)
+            {
+                return null;
+            }
+
+            return Path.Combine(normalizedRoot, Path.Combine(relativeParts.Take(depth).ToArray()));
+        }
+
+        return null;
+    }
 
     private Dictionary<int, TimeSpan> CaptureCpuTimes()
     {

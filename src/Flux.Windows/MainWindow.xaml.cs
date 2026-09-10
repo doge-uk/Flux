@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     private readonly ILogService _log;
     private readonly ObservableCollection<SearchResult> _results = [];
     private readonly DispatcherTimer _searchTimer;
+    private readonly DispatcherTimer _particleCleanupTimer;
     private CancellationTokenSource? _searchCancellation;
     private FluxAction? _pendingAction;
     private IReadOnlyList<PendingToolCall> _pendingTools = Array.Empty<PendingToolCall>();
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
     private bool _isHiding;
     private int _animationGeneration;
     private string _aiModeLabel = "LOCAL AI";
+    private string? _resolvedQuery;
 
     public MainWindow(
         ICommandRouter router,
@@ -81,6 +83,12 @@ public partial class MainWindow : Window
         ResultsList.ItemsSource = _results;
         _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(55) };
         _searchTimer.Tick += SearchTimer_Tick;
+        _particleCleanupTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(850) };
+        _particleCleanupTimer.Tick += (_, _) =>
+        {
+            _particleCleanupTimer.Stop();
+            ParticleCanvas.Children.Clear();
+        };
         _hotkey.Pressed += (_, _) => Dispatcher.Invoke(ToggleLauncher);
         _aiProvider.ModelStatusChanged += AiProvider_ModelStatusChanged;
     }
@@ -255,6 +263,7 @@ public partial class MainWindow : Window
         Placeholder.Visibility = string.IsNullOrEmpty(QueryBox.Text) ? Visibility.Visible : Visibility.Collapsed;
         _searchTimer.Stop();
         _searchCancellation?.Cancel();
+        _resolvedQuery = null;
         if (string.IsNullOrWhiteSpace(QueryBox.Text))
         {
             ResetPanels();
@@ -276,15 +285,18 @@ public partial class MainWindow : Window
 
     private async Task SearchAsync(string query)
     {
-        _searchCancellation?.Cancel();
-        _searchCancellation = new CancellationTokenSource();
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = _searchCancellation;
+        _searchCancellation = cancellation;
+        previousCancellation?.Cancel();
         try
         {
-            var decision = await _router.RouteAsync(query, _searchCancellation.Token);
+            var decision = await _router.RouteAsync(query, cancellation.Token);
             if (query != QueryBox.Text)
             {
                 return;
             }
+            _resolvedQuery = query;
 
             _results.Clear();
             if (decision.Kind == RouteKind.Search)
@@ -318,8 +330,20 @@ public partial class MainWindow : Window
         }
         catch (Exception exception)
         {
-            _log.Error("Search failed.", exception);
-            ShowStatus("Search failed", exception.Message, "ERROR");
+            if (ReferenceEquals(_searchCancellation, cancellation) &&
+                string.Equals(query, QueryBox.Text, StringComparison.Ordinal))
+            {
+                _log.Error("Search failed.", exception);
+                ShowStatus("Search failed", exception.Message, "ERROR");
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_searchCancellation, cancellation))
+            {
+                _searchCancellation = null;
+            }
+            cancellation.Dispose();
         }
     }
 
@@ -349,9 +373,9 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Up)
         {
-            if (ResultsList.Visibility == Visibility.Visible && ResultsList.SelectedIndex > 0)
+            if (ResultsList.Visibility == Visibility.Visible && _results.Count > 0)
             {
-                ResultsList.SelectedIndex--;
+                ResultsList.SelectedIndex = Math.Max(0, ResultsList.SelectedIndex - 1);
                 ResultsList.ScrollIntoView(ResultsList.SelectedItem);
             }
             else
@@ -365,11 +389,21 @@ public partial class MainWindow : Window
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            if (_results.Count == 0)
+            var query = QueryBox.Text;
+            if (string.IsNullOrWhiteSpace(query))
             {
-                await SearchAsync(QueryBox.Text);
+                return;
             }
 
+            _searchTimer.Stop();
+            if (!string.Equals(_resolvedQuery, query, StringComparison.Ordinal))
+            {
+                await SearchAsync(query);
+            }
+            if (!string.Equals(query, QueryBox.Text, StringComparison.Ordinal))
+            {
+                return;
+            }
             await ExecuteSelectedAsync();
         }
     }
@@ -560,7 +594,7 @@ public partial class MainWindow : Window
                     ShowStatus("Flux", string.Empty, _aiModeLabel);
                 }
                 streamedText.Append(chunk);
-                StatusText.Text = NormalizeAiText(streamedText.ToString());
+                MarkdownTextRenderer.Render(StatusText, NormalizeAiText(streamedText.ToString()));
             });
             var context = _results.Count == 0
                 ? "No deterministic search results were relevant."
@@ -589,9 +623,9 @@ public partial class MainWindow : Window
             else
             {
                 var finalText = NormalizeAiText(result.Text);
-                if (!streamStarted || !string.Equals(StatusText.Text, finalText, StringComparison.Ordinal))
+                if (!streamStarted || !string.Equals(NormalizeAiText(streamedText.ToString()), finalText, StringComparison.Ordinal))
                 {
-                    ShowStatus("Flux", string.IsNullOrWhiteSpace(finalText) ? "Done." : finalText, _aiModeLabel);
+                    ShowAiStatus(string.IsNullOrWhiteSpace(finalText) ? "Done." : finalText);
                 }
             }
         }
@@ -728,6 +762,12 @@ public partial class MainWindow : Window
         AnimateHeight(466);
     }
 
+    private void ShowAiStatus(string text)
+    {
+        ShowStatus("Flux", string.Empty, _aiModeLabel);
+        MarkdownTextRenderer.Render(StatusText, text);
+    }
+
     private void ShowBusy(string mode)
     {
         ResultsList.Visibility = Visibility.Collapsed;
@@ -806,6 +846,17 @@ public partial class MainWindow : Window
 
     private void AnimateLauncherOpen()
     {
+        if (!SystemParameters.ClientAreaAnimation)
+        {
+            Opacity = 1;
+            LauncherScale.ScaleX = 1;
+            LauncherScale.ScaleY = 1;
+            LauncherTranslate.Y = 0;
+            SearchPill.Opacity = 1;
+            ParticleCanvas.Children.Clear();
+            return;
+        }
+
         var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
         BeginAnimation(OpacityProperty,
             new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(190)) { EasingFunction = easing });
@@ -822,6 +873,7 @@ public partial class MainWindow : Window
 
     private void BeginParticleBuild()
     {
+        _particleCleanupTimer.Stop();
         ParticleCanvas.Children.Clear();
         var random = Random.Shared;
         var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
@@ -888,6 +940,8 @@ public partial class MainWindow : Window
             opacity.KeyFrames.Add(new EasingDoubleKeyFrame(0, KeyTime.FromTimeSpan(total + TimeSpan.FromMilliseconds(80)), easing));
             particle.BeginAnimation(OpacityProperty, opacity);
         }
+
+        _particleCleanupTimer.Start();
     }
 
     private void HideLauncher()
@@ -899,6 +953,20 @@ public partial class MainWindow : Window
 
         _isHiding = true;
         var generation = ++_animationGeneration;
+        if (!SystemParameters.ClientAreaAnimation)
+        {
+            Hide();
+            _aiProvider.ScheduleLocalModelUnload(ModelUnloadDelay);
+            _particleCleanupTimer.Stop();
+            ParticleCanvas.Children.Clear();
+            Opacity = 1;
+            LauncherScale.ScaleX = 1;
+            LauncherScale.ScaleY = 1;
+            LauncherTranslate.Y = 0;
+            _isHiding = false;
+            return;
+        }
+
         var easing = new CubicEase { EasingMode = EasingMode.EaseIn };
         var opacity = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(90)) { EasingFunction = easing };
         opacity.Completed += (_, _) =>
@@ -910,6 +978,7 @@ public partial class MainWindow : Window
 
             Hide();
             _aiProvider.ScheduleLocalModelUnload(ModelUnloadDelay);
+            _particleCleanupTimer.Stop();
             ParticleCanvas.Children.Clear();
             BeginAnimation(OpacityProperty, null);
             Opacity = 1;
@@ -932,6 +1001,13 @@ public partial class MainWindow : Window
         }
 
         ResultsSurface.Visibility = Visibility.Visible;
+        if (!SystemParameters.ClientAreaAnimation)
+        {
+            ResultsSurface.Opacity = 1;
+            ResultsTranslate.Y = 0;
+            return;
+        }
+
         ResultsSurface.Opacity = 0;
         ResultsTranslate.Y = -5;
         var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
@@ -945,7 +1021,7 @@ public partial class MainWindow : Window
     {
         var from = ActualHeight > 0 ? ActualHeight : Height;
         Height = targetHeight;
-        if (!IsVisible || Math.Abs(from - targetHeight) < 1)
+        if (!SystemParameters.ClientAreaAnimation || !IsVisible || Math.Abs(from - targetHeight) < 1)
         {
             return;
         }
@@ -960,6 +1036,12 @@ public partial class MainWindow : Window
 
     private static void AnimateElement(UIElement element)
     {
+        if (!SystemParameters.ClientAreaAnimation)
+        {
+            element.Opacity = 1;
+            return;
+        }
+
         element.BeginAnimation(OpacityProperty,
             new DoubleAnimation(0.35, 1, TimeSpan.FromMilliseconds(95))
             {

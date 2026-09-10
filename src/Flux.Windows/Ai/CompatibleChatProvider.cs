@@ -13,7 +13,7 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
     private const string SystemInstructions = """
         You are the action-planning component inside Flux, a Windows command launcher.
         Be concise and utility-like, not conversational. Use only the tools provided.
-        Output plain text only. Never use Markdown, headings, bullets, tables, code fences or emphasis markers.
+        Use lightweight Markdown only when it materially improves readability. Flux renders headings, short lists, emphasis, inline code, links, quotes and code blocks. Avoid tables and decorative formatting.
         Preserve normal sentences and real line breaks. Never emit escaped newline text such as backslash-n.
         Never invent paths, PIDs, applications, files, or tool results.
         For action requests, call the appropriate tool and do not claim the action succeeded in your text.
@@ -379,7 +379,7 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         return tools;
     }
 
-    private static IReadOnlyList<ToolCall> ParseToolCalls(JsonElement message)
+    internal static IReadOnlyList<ToolCall> ParseToolCalls(JsonElement message)
     {
         if (!message.TryGetProperty("tool_calls", out var callsElement) || callsElement.ValueKind != JsonValueKind.Array)
         {
@@ -389,27 +389,59 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         var calls = new List<ToolCall>();
         foreach (var callElement in callsElement.EnumerateArray())
         {
-            var function = callElement.GetProperty("function");
-            var name = function.GetProperty("name").GetString() ?? string.Empty;
-            var id = callElement.TryGetProperty("id", out var idElement)
+            if (callElement.ValueKind != JsonValueKind.Object ||
+                !callElement.TryGetProperty("function", out var function) ||
+                function.ValueKind != JsonValueKind.Object ||
+                !function.TryGetProperty("name", out var nameElement) ||
+                nameElement.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(nameElement.GetString()))
+            {
+                continue;
+            }
+
+            var name = nameElement.GetString()!;
+            var id = callElement.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.String
                 ? idElement.GetString() ?? $"call-{Guid.NewGuid():N}"
                 : $"call-{Guid.NewGuid():N}";
-            var argumentsElement = function.GetProperty("arguments");
-            JsonElement arguments;
-            if (argumentsElement.ValueKind == JsonValueKind.String)
-            {
-                using var argsDocument = JsonDocument.Parse(argumentsElement.GetString() ?? "{}");
-                arguments = argsDocument.RootElement.Clone();
-            }
-            else
-            {
-                arguments = argumentsElement.Clone();
-            }
+            var arguments = function.TryGetProperty("arguments", out var argumentsElement)
+                ? ParseToolArguments(argumentsElement)
+                : EmptyToolArguments();
 
             calls.Add(new ToolCall(id, name, arguments));
         }
 
         return calls;
+    }
+
+    private static JsonElement ParseToolArguments(JsonElement arguments)
+    {
+        if (arguments.ValueKind == JsonValueKind.Object)
+        {
+            return arguments.Clone();
+        }
+
+        if (arguments.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(arguments.GetString() ?? "{}");
+                return document.RootElement.ValueKind == JsonValueKind.Object
+                    ? document.RootElement.Clone()
+                    : EmptyToolArguments();
+            }
+            catch (JsonException)
+            {
+                return EmptyToolArguments();
+            }
+        }
+
+        return EmptyToolArguments();
+    }
+
+    private static JsonElement EmptyToolArguments()
+    {
+        using var document = JsonDocument.Parse("{}");
+        return document.RootElement.Clone();
     }
 
     private static string ReadText(JsonElement message)
