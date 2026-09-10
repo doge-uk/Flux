@@ -89,6 +89,7 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="92" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="54" />
                 </Grid.ColumnDefinitions>
 
@@ -107,7 +108,14 @@
                                Foreground="#707782" IsHitTestVisible="False" VerticalAlignment="Center" />
                 </Grid>
 
-                <Button Grid.Column="2" Style="{StaticResource CogButtonStyle}" ToolTip="Settings"
+                <Border x:Name="ModelBadge" Grid.Column="2" Visibility="Collapsed"
+                        VerticalAlignment="Center" Margin="4,0,5,0" Padding="9,5"
+                        Background="#1600D9A6" BorderBrush="#3000D9A6" BorderThickness="1" CornerRadius="12">
+                    <TextBlock x:Name="ModelBadgeText" Text="AI LOADING" Foreground="#9EEBD9"
+                               FontSize="10" FontWeight="SemiBold" />
+                </Border>
+
+                <Button Grid.Column="3" Style="{StaticResource CogButtonStyle}" ToolTip="Settings"
                         Click="Settings_Click" AutomationProperties.Name="Settings">
                     <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="21"
                                Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
@@ -201,7 +209,7 @@
                     <Grid x:Name="BusyPanel" Visibility="Collapsed" Margin="30,24">
                         <StackPanel VerticalAlignment="Center">
                             <ProgressBar IsIndeterminate="True" Height="2" Foreground="{StaticResource AccentBrush}" Background="#24FFFFFF" />
-                            <TextBlock Text="Working locally…" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0" />
+                            <TextBlock x:Name="BusyText" Text="Working locally…" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0" />
                         </StackPanel>
                     </Grid>
 

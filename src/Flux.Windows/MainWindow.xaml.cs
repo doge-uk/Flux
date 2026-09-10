@@ -14,6 +14,7 @@ using System.Windows.Threading;
 using Flux.Core;
 using Flux.Core.Agent;
 using Flux.Core.Search;
+using Flux.Windows.Ai;
 using Flux.Windows.Configuration;
 using Flux.Windows.SystemIntegration;
 
@@ -21,8 +22,10 @@ namespace Flux.Windows;
 
 public partial class MainWindow : Window
 {
+    private static readonly TimeSpan ModelUnloadDelay = TimeSpan.FromSeconds(30);
     private readonly ICommandRouter _router;
     private readonly FluxAgent _agent;
+    private readonly AiProviderRouter _aiProvider;
     private readonly IToolRegistry _tools;
     private readonly IProcessService _processes;
     private readonly ISystemInfoService _systemInfo;
@@ -43,10 +46,12 @@ public partial class MainWindow : Window
     private bool _settingsOpen;
     private bool _isHiding;
     private int _animationGeneration;
+    private string _aiModeLabel = "LOCAL AI";
 
     public MainWindow(
         ICommandRouter router,
         FluxAgent agent,
+        AiProviderRouter aiProvider,
         IToolRegistry tools,
         IProcessService processes,
         ISystemInfoService systemInfo,
@@ -61,6 +66,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         _router = router;
         _agent = agent;
+        _aiProvider = aiProvider;
         _tools = tools;
         _processes = processes;
         _systemInfo = systemInfo;
@@ -76,6 +82,7 @@ public partial class MainWindow : Window
         _searchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(55) };
         _searchTimer.Tick += SearchTimer_Tick;
         _hotkey.Pressed += (_, _) => Dispatcher.Invoke(ToggleLauncher);
+        _aiProvider.ModelStatusChanged += AiProvider_ModelStatusChanged;
     }
 
     public event EventHandler? HotkeyRegistrationFailed;
@@ -118,6 +125,7 @@ public partial class MainWindow : Window
         QueryBox.Focus();
         Keyboard.Focus(QueryBox);
         AnimateLauncherOpen();
+        _ = WarmUpSearchModelAsync();
     }
 
     private void ToggleLauncher()
@@ -152,13 +160,71 @@ public partial class MainWindow : Window
             _hotkey.Dispose();
             _hotkeyInitialized = false;
             InitializeHotkey();
+            _ = WarmUpSearchModelAsync();
         }
     }
 
     public void AllowClose()
     {
+        _aiProvider.ModelStatusChanged -= AiProvider_ModelStatusChanged;
         _hotkey.Dispose();
         Close();
+    }
+
+    private void AiProvider_ModelStatusChanged(AiModelStatus status)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => AiProvider_ModelStatusChanged(status)));
+            return;
+        }
+
+        var model = status.Model.Replace(':', ' ').ToUpperInvariant();
+        ModelBadge.Visibility = Visibility.Visible;
+        ModelBadge.ToolTip = $"{status.Provider}: {status.Model}";
+        ModelBadgeText.Text = status.Stage switch
+        {
+            AiModelStage.Loading => $"{model} LOADING",
+            AiModelStage.Ready => $"{model} READY",
+            AiModelStage.Upgraded => $"↑ {model} ACTIVE",
+            AiModelStage.Unloaded => $"{model} UNLOADED",
+            AiModelStage.Failed => $"{model} OFFLINE",
+            _ => $"{model} ACTIVE"
+        };
+        ModelBadgeText.Foreground = status.Stage switch
+        {
+            AiModelStage.Failed => new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 150, 150)),
+            AiModelStage.Upgraded => new SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 176, 255)),
+            AiModelStage.Unloaded => new SolidColorBrush(System.Windows.Media.Color.FromRgb(126, 134, 148)),
+            _ => new SolidColorBrush(System.Windows.Media.Color.FromRgb(158, 235, 217))
+        };
+        _aiModeLabel = status.IsLarger ? $"UPGRADED · {model}" : $"LOCAL · {model}";
+
+        if (BusyPanel.Visibility == Visibility.Visible)
+        {
+            ModeLabel.Text = _aiModeLabel;
+        }
+
+        if (status.Stage == AiModelStage.Upgraded)
+        {
+            BusyText.Text = $"Upgraded to {status.Model} for this request…";
+            if (StatusPanel.Visibility == Visibility.Visible)
+            {
+                StatusEyebrow.Text = _aiModeLabel;
+            }
+        }
+    }
+
+    private async Task WarmUpSearchModelAsync()
+    {
+        try
+        {
+            await _aiProvider.BeginLocalModelSessionAsync();
+        }
+        catch (Exception exception)
+        {
+            _log.Error("AI model warmup failed when the search UI opened.", exception);
+        }
     }
 
     private void QueryBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -457,7 +523,8 @@ public partial class MainWindow : Window
 
     private async Task RunAgentAsync(string request)
     {
-        ShowBusy("LOCAL AI");
+        ShowBusy(_aiModeLabel);
+        BusyText.Text = "Working locally…";
         try
         {
             var streamedText = new StringBuilder();
@@ -467,7 +534,7 @@ public partial class MainWindow : Window
                 if (!streamStarted)
                 {
                     streamStarted = true;
-                    ShowStatus("Flux", string.Empty, "LOCAL AI");
+                    ShowStatus("Flux", string.Empty, _aiModeLabel);
                 }
                 streamedText.Append(chunk);
                 StatusText.Text = NormalizeAiText(streamedText.ToString());
@@ -501,7 +568,7 @@ public partial class MainWindow : Window
                 var finalText = NormalizeAiText(result.Text);
                 if (!streamStarted || !string.Equals(StatusText.Text, finalText, StringComparison.Ordinal))
                 {
-                    ShowStatus("Flux", string.IsNullOrWhiteSpace(finalText) ? "Done." : finalText, "LOCAL AI");
+                    ShowStatus("Flux", string.IsNullOrWhiteSpace(finalText) ? "Done." : finalText, _aiModeLabel);
                 }
             }
         }
@@ -819,6 +886,7 @@ public partial class MainWindow : Window
             }
 
             Hide();
+            _aiProvider.ScheduleLocalModelUnload(ModelUnloadDelay);
             ParticleCanvas.Children.Clear();
             BeginAnimation(OpacityProperty, null);
             Opacity = 1;

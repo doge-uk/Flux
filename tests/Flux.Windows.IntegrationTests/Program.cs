@@ -4,10 +4,36 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Flux.Core;
 using Flux.Windows.Ai;
+using Flux.Windows.Configuration;
 using Flux.Windows.SystemIntegration;
 using Flux.Windows.Updates;
 
 await TestUpdateIntegrityAsync();
+
+if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
+{
+    var requestedModel = Environment.GetEnvironmentVariable("FLUX_TEST_MODEL")
+        ?? throw new InvalidOperationException("FLUX_TEST_MODEL is required for --warmup-only.");
+    var settings = new AppSettings { AiMode = AiMode.Local, LocalModel = requestedModel };
+    using var provider = new AiProviderRouter(settings);
+    var stages = new List<AiModelStage>();
+    var unloaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    provider.ModelStatusChanged += status =>
+    {
+        stages.Add(status.Stage);
+        if (status.Stage == AiModelStage.Unloaded)
+        {
+            unloaded.TrySetResult();
+        }
+    };
+    await provider.BeginLocalModelSessionAsync();
+    provider.ScheduleLocalModelUnload(TimeSpan.FromSeconds(1));
+    await unloaded.Task.WaitAsync(TimeSpan.FromSeconds(15));
+    Assert(stages.Contains(AiModelStage.Loading) && stages.Contains(AiModelStage.Ready) && stages.Contains(AiModelStage.Unloaded),
+        "The model lifecycle did not report loading, ready and unloaded states.");
+    Console.WriteLine($"PASS  Local model loaded on demand and unloaded after inactivity: {requestedModel}");
+    return 0;
+}
 
 if (args.Contains("--model-only", StringComparer.OrdinalIgnoreCase))
 {

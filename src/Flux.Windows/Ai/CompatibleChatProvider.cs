@@ -31,6 +31,7 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
 
     private readonly Uri _endpoint;
     private readonly string _model;
+    private readonly Uri? _ollamaGenerateEndpoint;
     private readonly HttpClient _http;
     private readonly ConcurrentDictionary<string, List<JsonObject>> _conversations = new();
 
@@ -39,6 +40,9 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         Name = name;
         _model = model;
         _endpoint = BuildEndpoint(endpoint);
+        _ollamaGenerateEndpoint = string.Equals(apiKey, "ollama", StringComparison.OrdinalIgnoreCase)
+            ? BuildOllamaGenerateEndpoint(_endpoint)
+            : null;
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
@@ -47,7 +51,63 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
     }
 
     public string Name { get; }
+    public string Model => _model;
+    public bool IsOllama => _ollamaGenerateEndpoint is not null;
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_model) && _endpoint.IsAbsoluteUri;
+
+    public async Task WarmUpAsync(CancellationToken cancellationToken = default)
+    {
+        if (_ollamaGenerateEndpoint is not null)
+        {
+            await SendOllamaLifecycleRequestAsync(JsonValue.Create("30s")!, cancellationToken);
+            return;
+        }
+
+        var payload = new JsonObject
+        {
+            ["model"] = _model,
+            ["messages"] = new JsonArray(
+                new JsonObject { ["role"] = "user", ["content"] = "Ready" }),
+            ["max_tokens"] = 1,
+            ["temperature"] = 0,
+            ["stream"] = false
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint)
+        {
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"{Name} warmup returned {(int)response.StatusCode}: {ReadError(errorBody)}");
+        }
+    }
+
+    public Task UnloadAsync(CancellationToken cancellationToken = default) =>
+        _ollamaGenerateEndpoint is null
+            ? Task.CompletedTask
+            : SendOllamaLifecycleRequestAsync(JsonValue.Create(0)!, cancellationToken);
+
+    private async Task SendOllamaLifecycleRequestAsync(JsonNode keepAlive, CancellationToken cancellationToken)
+    {
+        var payload = new JsonObject
+        {
+            ["model"] = _model,
+            ["stream"] = false,
+            ["keep_alive"] = keepAlive
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, _ollamaGenerateEndpoint)
+        {
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"Ollama returned {(int)response.StatusCode}: {ReadError(errorBody)}");
+        }
+    }
 
     public Task<AiTurnResponse> CompleteAsync(
         AiTurnRequest request,
@@ -389,6 +449,17 @@ public sealed class CompatibleChatProvider : IStreamingAiProvider, IDisposable
         }
 
         return new Uri(endpoint + "/v1/chat/completions");
+    }
+
+    private static Uri BuildOllamaGenerateEndpoint(Uri chatEndpoint)
+    {
+        var builder = new UriBuilder(chatEndpoint)
+        {
+            Path = "/api/generate",
+            Query = string.Empty,
+            Fragment = string.Empty
+        };
+        return builder.Uri;
     }
 
     private static string ReadError(string responseBody)

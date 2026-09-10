@@ -5,6 +5,18 @@ using Flux.Windows.Configuration;
 
 namespace Flux.Windows.Ai;
 
+public enum AiModelStage
+{
+    Loading,
+    Ready,
+    Active,
+    Upgraded,
+    Unloaded,
+    Failed
+}
+
+public sealed record AiModelStatus(string Model, string Provider, AiModelStage Stage, bool IsLarger);
+
 public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvider, IDisposable
 {
     private const string EscalationToolName = "request_larger_model";
@@ -24,6 +36,14 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
 
     private readonly ConcurrentDictionary<string, CompatibleChatProvider> _providers = new();
     private readonly ConcurrentDictionary<string, string> _responseOwners = new();
+    private readonly object _warmupGate = new();
+    private string? _warmupKey;
+    private Task? _warmupTask;
+    private readonly object _unloadGate = new();
+    private CancellationTokenSource? _unloadCancellation;
+    private int _activeRequests;
+
+    public event Action<AiModelStatus>? ModelStatusChanged;
 
     public string Name => settings.AiMode switch
     {
@@ -52,13 +72,148 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
 
     public Task<AiTurnResponse> CompleteAsync(AiTurnRequest request, CancellationToken cancellationToken = default) =>
-        CompleteCoreAsync(request, null, cancellationToken);
+        CompleteTrackedAsync(request, null, cancellationToken);
 
     public Task<AiTurnResponse> CompleteStreamingAsync(
         AiTurnRequest request,
         IProgress<string> textProgress,
         CancellationToken cancellationToken = default) =>
-        CompleteCoreAsync(request, textProgress, cancellationToken);
+        CompleteTrackedAsync(request, textProgress, cancellationToken);
+
+    public Task BeginLocalModelSessionAsync(CancellationToken cancellationToken = default)
+    {
+        CancelScheduledUnload();
+        return WarmUpFastModelAsync(cancellationToken);
+    }
+
+    public void ScheduleLocalModelUnload(TimeSpan delay)
+    {
+        CancelScheduledUnload();
+        if (settings.AiMode is AiMode.Disabled or AiMode.Cloud || !HasFastLocalConfiguration)
+        {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        lock (_unloadGate)
+        {
+            _unloadCancellation = cancellation;
+        }
+        _ = UnloadAfterDelayAsync(delay, cancellation);
+    }
+
+    private async Task<AiTurnResponse> CompleteTrackedAsync(
+        AiTurnRequest request,
+        IProgress<string>? textProgress,
+        CancellationToken cancellationToken)
+    {
+        CancelScheduledUnload();
+        Interlocked.Increment(ref _activeRequests);
+        try
+        {
+            return await CompleteCoreAsync(request, textProgress, cancellationToken);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeRequests);
+        }
+    }
+
+    public Task WarmUpFastModelAsync(CancellationToken cancellationToken = default)
+    {
+        if (settings.AiMode is AiMode.Disabled or AiMode.Cloud || !HasFastLocalConfiguration)
+        {
+            return Task.CompletedTask;
+        }
+
+        var fast = GetLocalProvider(settings.LocalModel, "Fast local model");
+        Task warmup;
+        lock (_warmupGate)
+        {
+            if (_warmupKey != fast.Key || _warmupTask is null || _warmupTask.IsFaulted || _warmupTask.IsCanceled)
+            {
+                _warmupKey = fast.Key;
+                _warmupTask = WarmUpCoreAsync(fast.Provider);
+            }
+            warmup = _warmupTask;
+        }
+
+        return cancellationToken.CanBeCanceled ? warmup.WaitAsync(cancellationToken) : warmup;
+    }
+
+    private async Task WarmUpCoreAsync(CompatibleChatProvider provider)
+    {
+        PublishStatus(provider, AiModelStage.Loading, isLarger: false);
+        try
+        {
+            await provider.WarmUpAsync();
+            PublishStatus(provider, AiModelStage.Ready, isLarger: false);
+        }
+        catch
+        {
+            PublishStatus(provider, AiModelStage.Failed, isLarger: false);
+            throw;
+        }
+    }
+
+    private async Task UnloadAfterDelayAsync(TimeSpan delay, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(delay, cancellation.Token);
+            while (Volatile.Read(ref _activeRequests) > 0)
+            {
+                await Task.Delay(250, cancellation.Token);
+            }
+
+            var localProviders = _providers.Values
+                .Where(provider => provider.IsOllama)
+                .Distinct()
+                .ToArray();
+            foreach (var provider in localProviders)
+            {
+                await provider.UnloadAsync(cancellation.Token);
+            }
+
+            lock (_warmupGate)
+            {
+                _warmupKey = null;
+                _warmupTask = null;
+            }
+
+            var fast = localProviders.FirstOrDefault(provider =>
+                string.Equals(provider.Model, settings.LocalModel, StringComparison.OrdinalIgnoreCase));
+            if (fast is not null)
+            {
+                PublishStatus(fast, AiModelStage.Unloaded, isLarger: false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            lock (_unloadGate)
+            {
+                if (ReferenceEquals(_unloadCancellation, cancellation))
+                {
+                    _unloadCancellation = null;
+                }
+            }
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelScheduledUnload()
+    {
+        CancellationTokenSource? cancellation;
+        lock (_unloadGate)
+        {
+            cancellation = _unloadCancellation;
+            _unloadCancellation = null;
+        }
+        cancellation?.Cancel();
+    }
 
     private async Task<AiTurnResponse> CompleteCoreAsync(
         AiTurnRequest request,
@@ -84,6 +239,19 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
         }
 
         var fast = GetLocalProvider(settings.LocalModel, "Fast local model");
+        try
+        {
+            await WarmUpFastModelAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // The real request below reports the useful provider error if the warmup failed.
+        }
+        PublishStatus(fast.Provider, AiModelStage.Active, isLarger: false);
         var routingRequest = request with
         {
             Context = request.Context +
@@ -103,6 +271,7 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
 
         _responseOwners.TryRemove(first.ResponseId, out _);
         var larger = GetEscalationProvider();
+        PublishStatus(larger.Provider, AiModelStage.Upgraded, isLarger: true);
         return await CompleteWithAsync(larger.Provider, larger.Key, request, textProgress, cancellationToken);
     }
 
@@ -162,8 +331,12 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
         return (provider, key);
     }
 
+    private void PublishStatus(CompatibleChatProvider provider, AiModelStage stage, bool isLarger) =>
+        ModelStatusChanged?.Invoke(new AiModelStatus(provider.Model, provider.Name, stage, isLarger));
+
     public void Dispose()
     {
+        CancelScheduledUnload();
         foreach (var provider in _providers.Values)
         {
             provider.Dispose();

@@ -62,7 +62,7 @@ public partial class App : System.Windows.Application
         var hotkey = new GlobalHotkeyManager();
 
         _window = new MainWindow(
-            router, agent, tools, processes, systemInfo, history,
+            router, agent, _provider, tools, processes, systemInfo, history,
             applications, settings, _settingsService, _startup, hotkey, log);
         MainWindow = _window;
 
