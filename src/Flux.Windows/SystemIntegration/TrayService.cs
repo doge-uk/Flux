@@ -1,6 +1,6 @@
 using Forms = System.Windows.Forms;
 using Drawing = System.Drawing;
-using System.Diagnostics;
+using Flux.Windows.Updates;
 
 namespace Flux.Windows.SystemIntegration;
 
@@ -10,17 +10,23 @@ public sealed class TrayService : IDisposable
     private readonly Drawing.Icon? _applicationIcon;
     private readonly Forms.ToolStripMenuItem _updateItem;
     private readonly Action _checkForUpdates;
-    private Uri? _releaseUri;
-    private Uri? _balloonUri;
+    private readonly Action<UpdatePackage> _installUpdate;
+    private UpdatePackage? _updatePackage;
 
-    public TrayService(Action show, Action settings, Action checkForUpdates, Action exit)
+    public TrayService(
+        Action show,
+        Action settings,
+        Action checkForUpdates,
+        Action<UpdatePackage> installUpdate,
+        Action exit)
     {
         _checkForUpdates = checkForUpdates;
+        _installUpdate = installUpdate;
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("Open Flux", null, (_, _) => show());
         menu.Items.Add("Settings", null, (_, _) => settings());
         _updateItem = new Forms.ToolStripMenuItem("Check for updates");
-        _updateItem.Click += (_, _) => OpenReleaseOrCheck();
+        _updateItem.Click += (_, _) => InstallOrCheck();
         menu.Items.Add(_updateItem);
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => exit());
@@ -36,12 +42,11 @@ public sealed class TrayService : IDisposable
             Visible = true
         };
         _icon.DoubleClick += (_, _) => show();
-        _icon.BalloonTipClicked += (_, _) => OpenUri(_balloonUri);
+        _icon.BalloonTipClicked += (_, _) => InstallAvailableUpdate();
     }
 
     public void ShowWarning(string title, string message)
     {
-        _balloonUri = null;
         _icon.BalloonTipTitle = title;
         _icon.BalloonTipText = message;
         _icon.BalloonTipIcon = Forms.ToolTipIcon.Warning;
@@ -50,67 +55,67 @@ public sealed class TrayService : IDisposable
 
     public void ShowInformation(string title, string message)
     {
-        _balloonUri = null;
         _icon.BalloonTipTitle = title;
         _icon.BalloonTipText = message;
         _icon.BalloonTipIcon = Forms.ToolTipIcon.Info;
         _icon.ShowBalloonTip(4000);
     }
 
-    public void ShowUpdateAvailable(Version version, Uri releaseUri)
+    public void ShowUpdateAvailable(UpdatePackage package)
     {
-        if (!IsSafeGitHubUri(releaseUri))
-        {
-            return;
-        }
-
-        _releaseUri = releaseUri;
-        _balloonUri = releaseUri;
-        _updateItem.Text = $"Download Flux {FormatVersion(version)}";
+        _updatePackage = package;
+        _updateItem.Enabled = true;
+        _updateItem.Text = $"Install Flux {FormatVersion(package.Version)}";
         _updateItem.Font = new Drawing.Font(_updateItem.Font, Drawing.FontStyle.Bold);
-        _icon.BalloonTipTitle = $"Flux {FormatVersion(version)} is available";
-        _icon.BalloonTipText = "Click to view the release and download the update.";
+        _icon.BalloonTipTitle = $"Flux {FormatVersion(package.Version)} is ready";
+        _icon.BalloonTipText = "Click to download, verify, and install the update.";
         _icon.BalloonTipIcon = Forms.ToolTipIcon.Info;
         _icon.ShowBalloonTip(6000);
     }
 
+    public void ShowUpdateDownloading(Version version)
+    {
+        _updateItem.Enabled = false;
+        _updateItem.Text = $"Downloading Flux {FormatVersion(version)}…";
+    }
+
+    public void RestoreUpdateAvailable()
+    {
+        if (_updatePackage is not null)
+        {
+            _updateItem.Enabled = true;
+            _updateItem.Text = $"Install Flux {FormatVersion(_updatePackage.Version)}";
+        }
+    }
+
     public void ClearUpdateAvailable()
     {
-        _releaseUri = null;
+        _updatePackage = null;
+        _updateItem.Enabled = true;
         _updateItem.Text = "Check for updates";
         _updateItem.Font = new Drawing.Font(_updateItem.Font, Drawing.FontStyle.Regular);
     }
 
-    private void OpenReleaseOrCheck()
+    private void InstallOrCheck()
     {
-        if (_releaseUri is not null)
+        if (_updatePackage is not null)
         {
-            OpenUri(_releaseUri);
+            InstallAvailableUpdate();
             return;
         }
 
         _checkForUpdates();
     }
 
-    private static void OpenUri(Uri? uri)
+    private void InstallAvailableUpdate()
     {
-        if (uri is null || !IsSafeGitHubUri(uri))
+        if (_updatePackage is null || !_updateItem.Enabled)
         {
             return;
         }
 
-        try
-        {
-            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
-        }
-        catch
-        {
-            // A missing browser association must not affect the tray process.
-        }
+        _installUpdate(_updatePackage);
     }
-
-    private static bool IsSafeGitHubUri(Uri uri) =>
-        uri.Scheme == Uri.UriSchemeHttps && uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatVersion(Version version) => $"v{version.Major}.{version.Minor}.{version.Build}";
 

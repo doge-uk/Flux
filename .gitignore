@@ -5,6 +5,7 @@ obj/
 .dotnet/
 .dotnet-home/
 .nuget/
+.tools/
 artifacts/
 *.user
 *.suo

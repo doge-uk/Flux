@@ -5,7 +5,7 @@
         Title="Flux" Width="840" Height="104" MinWidth="700" MaxHeight="660"
         WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True"
         Background="Transparent" ShowInTaskbar="False" Topmost="True"
-        SnapsToDevicePixels="True" Closing="Window_Closing" Deactivated="Window_Deactivated">
+        SnapsToDevicePixels="True" Deactivated="Window_Deactivated">
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0" CornerRadius="0" GlassFrameThickness="0" ResizeBorderThickness="0" />
     </shell:WindowChrome.WindowChrome>

@@ -39,7 +39,6 @@ public partial class MainWindow : Window
     private FluxAction? _pendingAction;
     private IReadOnlyList<PendingToolCall> _pendingTools = Array.Empty<PendingToolCall>();
     private int _historyIndex = -1;
-    private bool _allowClose;
     private bool _hotkeyInitialized;
     private bool _settingsOpen;
     private bool _isHiding;
@@ -158,7 +157,6 @@ public partial class MainWindow : Window
 
     public void AllowClose()
     {
-        _allowClose = true;
         _hotkey.Dispose();
         Close();
     }
@@ -876,12 +874,4 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
-    {
-        if (!_allowClose)
-        {
-            e.Cancel = true;
-            HideLauncher();
-        }
-    }
 }

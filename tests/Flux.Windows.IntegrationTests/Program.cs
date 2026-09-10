@@ -1,8 +1,13 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Nodes;
 using Flux.Core;
 using Flux.Windows.Ai;
 using Flux.Windows.SystemIntegration;
+using Flux.Windows.Updates;
+
+await TestUpdateIntegrityAsync();
 
 if (args.Contains("--model-only", StringComparer.OrdinalIgnoreCase))
 {
@@ -95,6 +100,29 @@ static async Task TestLocalModelProtocolAsync(string model)
     Assert(streamed.Text.Contains("Hello from Flux", StringComparison.OrdinalIgnoreCase),
         $"{model} streaming response text was not reconstructed correctly: {streamed.Text}");
     Console.WriteLine("PASS  Local model streams and reconstructs response text");
+}
+
+static async Task TestUpdateIntegrityAsync()
+{
+    var bytes = Encoding.UTF8.GetBytes("flux-update-integrity-test");
+    var expected = Convert.ToHexString(SHA256.HashData(bytes));
+    Assert(UpdateIntegrity.TryParseGitHubDigest("sha256:" + expected.ToLowerInvariant(), out var parsed) && parsed == expected,
+        "A valid GitHub SHA-256 digest was not accepted.");
+    Assert(!UpdateIntegrity.TryParseGitHubDigest("sha256:not-a-hash", out _),
+        "An invalid GitHub digest was accepted.");
+
+    var path = Path.Combine(Path.GetTempPath(), $"flux-update-{Guid.NewGuid():N}.test");
+    try
+    {
+        await File.WriteAllBytesAsync(path, bytes);
+        Assert(await UpdateIntegrity.VerifyFileAsync(path, expected), "The expected update hash did not verify.");
+        Assert(!await UpdateIntegrity.VerifyFileAsync(path, new string('0', 64)), "A mismatched update hash was accepted.");
+        Console.WriteLine("PASS  Update packages require a valid matching SHA-256 digest");
+    }
+    finally
+    {
+        File.Delete(path);
+    }
 }
 
 static Process StartWindowProcess(string executable, bool ignoreClose)

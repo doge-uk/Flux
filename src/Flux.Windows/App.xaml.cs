@@ -22,7 +22,9 @@ public partial class App : System.Windows.Application
     private SettingsService? _settingsService;
     private StartupManager? _startup;
     private GitHubReleaseUpdateService? _updates;
+    private ILogService? _log;
     private int _updateCheckInProgress;
+    private int _updateInstallInProgress;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -36,6 +38,7 @@ public partial class App : System.Windows.Application
         }
 
         var log = new LogService();
+        _log = log;
         DispatcherUnhandledException += (_, args) =>
         {
             log.Error("Unhandled UI exception.", args.Exception);
@@ -67,6 +70,7 @@ public partial class App : System.Windows.Application
             () => _window.ShowLauncher(),
             () => _window.ShowSettings(),
             () => _ = CheckForUpdatesAsync(showCurrentStatus: true),
+            package => _ = InstallUpdateAsync(package),
             ExitApplication);
         _window.HotkeyRegistrationFailed += (_, _) =>
             _tray.ShowWarning("Flux hotkey unavailable", "Alt + Space is already in use. Flux is still available from the tray.");
@@ -111,8 +115,8 @@ public partial class App : System.Windows.Application
             var result = await _updates.CheckAsync();
             switch (result.Status)
             {
-                case UpdateCheckStatus.UpdateAvailable when result.LatestVersion is not null && result.ReleaseUri is not null:
-                    _tray?.ShowUpdateAvailable(result.LatestVersion, result.ReleaseUri);
+                case UpdateCheckStatus.UpdateAvailable when result.Package is not null:
+                    _tray?.ShowUpdateAvailable(result.Package);
                     break;
 
                 case UpdateCheckStatus.UpToDate:
@@ -141,6 +145,34 @@ public partial class App : System.Windows.Application
         finally
         {
             Interlocked.Exchange(ref _updateCheckInProgress, 0);
+        }
+    }
+
+    private async Task InstallUpdateAsync(UpdatePackage package)
+    {
+        if (_updates is null || Interlocked.Exchange(ref _updateInstallInProgress, 1) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            _tray?.ShowUpdateDownloading(package.Version);
+            var installerPath = await _updates.DownloadInstallerAsync(package);
+            using var installer = await _updates.LaunchInstallerAsync(package, installerPath);
+            ExitApplication();
+        }
+        catch (Exception exception)
+        {
+            _log?.Error("Update installation failed.", exception);
+            _tray?.RestoreUpdateAvailable();
+            _tray?.ShowWarning(
+                "Flux update failed",
+                "The installer was not opened. Flux is still running unchanged.");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _updateInstallInProgress, 0);
         }
     }
 

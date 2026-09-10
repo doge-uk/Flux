@@ -9,7 +9,7 @@ Flux is a native Windows search and command utility. Press `Alt + Space`, type w
 
 Flux is an actual WPF desktop application, not a browser shell. It lives in the system tray, can start with Windows, discovers Start Menu and registered applications, searches user files, keeps local command history, and provides native process/system inspection.
 
-Flux can also check GitHub Releases asynchronously whenever it launches. The check never delays the launcher: failures stay silent, while a newer stable version appears as a tray notification and a persistent download item in the tray menu.
+Flux checks GitHub Releases asynchronously whenever it launches. The check never delays the launcher. A newer stable version appears in the tray, where one click downloads the versioned installer, verifies its size and GitHub SHA-256 digest, launches the silent per-user upgrade, and exits the old Flux process. Failed verification never opens the installer and leaves the current installation unchanged.
 
 ## Run from source
 
@@ -54,9 +54,9 @@ The close-confirmation setting may be disabled for normal application-close comm
 .\scripts\Build-Release.ps1
 ```
 
-This runs the build and safety tests, publishes a self-contained `win-x64` app, creates `artifacts/Flux-win-x64.zip`, and writes its SHA-256 hash. Use `-FrameworkDependent` for a smaller package that requires the .NET 10 Desktop Runtime.
+This runs the build and safety tests, publishes a self-contained `win-x64` app, creates `artifacts/Flux-win-x64.zip`, and writes its SHA-256 hash. When Inno Setup 6 is installed, it also creates a versioned per-user installer under `artifacts/installer`. Use `-RequireInstaller` in release automation and `-FrameworkDependent` for a smaller package that requires the .NET 10 Desktop Runtime.
 
-`packaging/Flux.iss` is an Inno Setup definition for producing a per-user installer from the published folder. Compile it after running the release script. The portable zip works without an installer.
+`packaging/Flux.iss` defines an upgradeable per-user installation under `%LOCALAPPDATA%\Programs\Flux`, including Start Menu and optional desktop/startup entries. Settings and history remain in `%LOCALAPPDATA%\Flux` across upgrades. The portable ZIP remains available for users who do not want an installation.
 
 To connect a release build to a public GitHub Releases feed, provide the repository when packaging:
 
@@ -64,7 +64,7 @@ To connect a release build to a public GitHub Releases feed, provide the reposit
 .\scripts\Build-Release.ps1 -GitHubRepository owner/repository
 ```
 
-You can alternatively set `FLUX_UPDATE_REPOSITORY=owner/repository`. Create stable tags such as `v0.1.1` and attach `Flux-win-x64.zip` to each GitHub Release. Private repositories are not supported because Flux deliberately does not embed a GitHub access token.
+You can alternatively set `FLUX_UPDATE_REPOSITORY=owner/repository`. Stable releases must include both `Flux-win-x64.zip` and the exact versioned setup executable produced by the build. Private repositories are not supported because Flux deliberately does not embed a GitHub access token.
 
 The included GitHub Actions release workflow does this automatically. After pushing the project, create and push a three-part version tag:
 
@@ -73,7 +73,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The Windows workflow builds and tests Flux, embeds the actual GitHub repository and tag version, and publishes the portable ZIP as the release asset.
+The Windows workflow builds and tests Flux, embeds the actual GitHub repository and tag version, compiles the installer, and publishes both the setup executable and portable ZIP as release assets.
 
 ## Project layout
 
