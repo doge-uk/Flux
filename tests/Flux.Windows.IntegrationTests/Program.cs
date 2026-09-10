@@ -19,6 +19,7 @@ TestMarkdownRendering();
 TestEndpointValidation();
 TestSystemInstructions();
 TestBackgroundProcessToolContract();
+await TestCloudModeClosesLocalSessionAsync();
 await TestFileSearchBudgetAsync();
 await TestPowerShellExecutionSafetyAsync();
 await TestBackgroundOnlyApplicationCloseAsync();
@@ -214,6 +215,26 @@ static void TestBackgroundProcessToolContract()
     Assert(CompatibleChatProvider.SystemInstructions.Contains("HelperProcess", StringComparison.Ordinal),
         "The system prompt does not prevent helpers from being selected independently.");
     Console.WriteLine("PASS  AI tools advertise safe background application shutdown");
+}
+
+static async Task TestCloudModeClosesLocalSessionAsync()
+{
+    var settings = new AppSettings
+    {
+        AiMode = AiMode.Cloud,
+        LocalEndpoint = "http://localhost:11434",
+        LocalModel = "qwen3.5:2b"
+    };
+    using var router = new AiProviderRouter(settings);
+    await router.BeginLocalModelSessionAsync();
+    Assert(!router.IsLocalSessionOpen,
+        "Cloud mode incorrectly kept a local model session open.");
+
+    settings.AiMode = AiMode.Disabled;
+    await router.BeginLocalModelSessionAsync();
+    Assert(!router.IsLocalSessionOpen,
+        "Disabled AI mode incorrectly kept a local model session open.");
+    Console.WriteLine("PASS  Cloud and disabled modes release the local model session");
 }
 
 static async Task TestLocalModelProtocolAsync(string model)

@@ -138,7 +138,7 @@ public partial class MainWindow : Window
         QueryBox.Focus();
         Keyboard.Focus(QueryBox);
         AnimateLauncherOpen();
-        _ = WarmUpSearchModelAsync();
+        RefreshAiModelState();
     }
 
     private void ToggleLauncher()
@@ -173,7 +173,7 @@ public partial class MainWindow : Window
             _hotkey.Dispose();
             _hotkeyInitialized = false;
             InitializeHotkey();
-            _ = WarmUpSearchModelAsync();
+            RefreshAiModelState();
         }
     }
 
@@ -667,6 +667,20 @@ public partial class MainWindow : Window
             }
             cancellation.Dispose();
         }
+    }
+
+    private void RefreshAiModelState()
+    {
+        if (_settings.AiMode is AiMode.Local or AiMode.Automatic)
+        {
+            _ = WarmUpSearchModelAsync();
+            return;
+        }
+
+        ModelBadgeRotation.BeginAnimation(RotateTransform.AngleProperty, null);
+        ModelBadge.Visibility = Visibility.Collapsed;
+        _aiModeLabel = _settings.AiMode == AiMode.Cloud ? "CLOUD AI" : "AI OFF";
+        _ = WarmUpSearchModelAsync();
     }
 
     private bool IsCurrentAgentRequest(CancellationTokenSource cancellation, int generation) =>

@@ -81,11 +81,24 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
         CancellationToken cancellationToken = default) =>
         CompleteTrackedAsync(request, textProgress, cancellationToken);
 
-    public Task BeginLocalModelSessionAsync(CancellationToken cancellationToken = default)
+    internal bool IsLocalSessionOpen => Volatile.Read(ref _localSessionOpen) == 1;
+
+    public async Task BeginLocalModelSessionAsync(CancellationToken cancellationToken = default)
     {
-        Interlocked.Exchange(ref _localSessionOpen, 1);
         CancelScheduledUnload();
-        return WarmUpFastModelAsync(cancellationToken);
+        if (settings.AiMode is AiMode.Disabled or AiMode.Cloud || !HasFastLocalConfiguration)
+        {
+            Interlocked.Exchange(ref _localSessionOpen, 0);
+            while (Volatile.Read(ref _activeRequests) > 0)
+            {
+                await Task.Delay(100, cancellationToken);
+            }
+            await UnloadLocalProvidersAsync(cancellationToken);
+            return;
+        }
+
+        Interlocked.Exchange(ref _localSessionOpen, 1);
+        await WarmUpFastModelAsync(cancellationToken);
     }
 
     public void ScheduleLocalModelUnload(TimeSpan delay)
@@ -191,20 +204,7 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
                 await Task.Delay(250, cancellation.Token);
             }
 
-            var localProviders = _providers.Values
-                .Where(provider => provider.IsOllama)
-                .Distinct()
-                .ToArray();
-            foreach (var provider in localProviders)
-            {
-                await provider.UnloadAsync(cancellation.Token);
-            }
-
-            lock (_warmupGate)
-            {
-                _warmupKey = null;
-                _warmupTask = null;
-            }
+            var localProviders = await UnloadLocalProvidersAsync(cancellation.Token);
 
             var fast = localProviders.FirstOrDefault(provider =>
                 string.Equals(provider.Model, settings.LocalModel, StringComparison.OrdinalIgnoreCase));
@@ -227,6 +227,25 @@ public sealed class AiProviderRouter(AppSettings settings) : IStreamingAiProvide
             }
             cancellation.Dispose();
         }
+    }
+
+    private async Task<IReadOnlyList<CompatibleChatProvider>> UnloadLocalProvidersAsync(CancellationToken cancellationToken)
+    {
+        var localProviders = _providers.Values
+            .Where(provider => provider.IsOllama)
+            .Distinct()
+            .ToArray();
+        foreach (var provider in localProviders)
+        {
+            await provider.UnloadAsync(cancellationToken);
+        }
+
+        lock (_warmupGate)
+        {
+            _warmupKey = null;
+            _warmupTask = null;
+        }
+        return localProviders;
     }
 
     private void CancelScheduledUnload()
