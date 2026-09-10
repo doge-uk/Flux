@@ -166,6 +166,16 @@ public partial class App : System.Windows.Application
                     break;
             }
         }
+        catch (Exception exception)
+        {
+            _log?.Error("Unexpected update-check failure.", exception);
+            if (showCurrentStatus)
+            {
+                _tray?.ShowWarning(
+                    "Could not check for updates",
+                    "The update check stopped unexpectedly. Flux is still running normally.");
+            }
+        }
         finally
         {
             Interlocked.Exchange(ref _updateCheckInProgress, 0);
