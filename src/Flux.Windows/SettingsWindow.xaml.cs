@@ -118,14 +118,17 @@ public partial class SettingsWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        if (selectedMode is AiMode.Cloud or AiMode.Automatic &&
+        var cloudConfigured = !string.IsNullOrWhiteSpace(CloudEndpointBox.Text) ||
+            !string.IsNullOrWhiteSpace(CloudModelBox.Text);
+        var cloudRequired = selectedMode == AiMode.Cloud || selectedMode == AiMode.Automatic && cloudConfigured;
+        if (cloudRequired &&
             !EndpointValidator.IsHttpEndpoint(CloudEndpointBox.Text))
         {
             System.Windows.MessageBox.Show("Enter a valid HTTP or HTTPS cloud endpoint.", "Flux Settings",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        if (selectedMode is AiMode.Cloud or AiMode.Automatic && string.IsNullOrWhiteSpace(CloudModelBox.Text))
+        if (cloudRequired && string.IsNullOrWhiteSpace(CloudModelBox.Text))
         {
             System.Windows.MessageBox.Show("Choose a cloud model.", "Flux Settings",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
