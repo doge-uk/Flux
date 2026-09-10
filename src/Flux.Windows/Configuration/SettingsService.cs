@@ -37,8 +37,13 @@ public sealed class SettingsService
         {
             if (File.Exists(_path))
             {
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_path), JsonOptions)
+                var loaded = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_path), JsonOptions)
                     ?? new AppSettings();
+                if (string.Equals(loaded.LocalModel, "qwen3:8b", StringComparison.OrdinalIgnoreCase))
+                {
+                    loaded.LocalModel = "qwen3.5:2b";
+                }
+                return loaded;
             }
         }
         catch
@@ -49,4 +54,3 @@ public sealed class SettingsService
         return new AppSettings();
     }
 }
-

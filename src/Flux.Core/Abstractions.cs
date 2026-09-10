@@ -18,6 +18,10 @@ public interface IProcessService
     Task<IReadOnlyList<ProcessSnapshot>> ListAsync(CancellationToken cancellationToken = default);
     Task<ToolResult> TerminateAsync(int processId, CancellationToken cancellationToken = default);
     Task<ToolResult> CloseAsync(int processId, CancellationToken cancellationToken = default);
+    Task<ToolResult> TerminateApplicationAsync(string applicationName, CancellationToken cancellationToken = default);
+    Task<ToolResult> CloseApplicationAsync(string applicationName, CancellationToken cancellationToken = default);
+    Task<ToolResult> CloseApplicationsAsync(IReadOnlyCollection<string> applicationNames, CancellationToken cancellationToken = default);
+    Task<ToolResult> CloseAllExceptAsync(IReadOnlyCollection<string> exclusions, CancellationToken cancellationToken = default);
     bool IsProtected(string processName);
 }
 
@@ -50,6 +54,14 @@ public interface IAiProvider
     Task<AiTurnResponse> CompleteAsync(AiTurnRequest request, CancellationToken cancellationToken = default);
 }
 
+public interface IStreamingAiProvider : IAiProvider
+{
+    Task<AiTurnResponse> CompleteStreamingAsync(
+        AiTurnRequest request,
+        IProgress<string> textProgress,
+        CancellationToken cancellationToken = default);
+}
+
 public interface ICommandHistory
 {
     IReadOnlyList<string> Items { get; }
@@ -62,4 +74,3 @@ public interface ILogService
     void Info(string message);
     void Error(string message, Exception? exception = null);
 }
-

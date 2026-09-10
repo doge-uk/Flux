@@ -35,6 +35,7 @@ public partial class SettingsWindow : Window
         ModeBox.SelectedItem = settings.AiMode;
         LocalEndpointBox.Text = settings.LocalEndpoint;
         LocalModelBox.Text = settings.LocalModel;
+        LocalLargeModelBox.Text = settings.LocalLargeModel;
         CloudModelBox.Text = settings.CloudModel;
         StartupBox.IsChecked = _startup.IsEnabled;
         UpdateCheckBox.IsChecked = settings.CheckForUpdatesOnLaunch;
@@ -57,10 +58,15 @@ public partial class SettingsWindow : Window
         if (result.Models.Count > 0)
         {
             var current = LocalModelBox.Text;
+            var currentLarge = LocalLargeModelBox.Text;
             LocalModelBox.ItemsSource = result.Models;
+            LocalLargeModelBox.ItemsSource = result.Models;
             LocalModelBox.Text = result.Models.Contains(current, StringComparer.OrdinalIgnoreCase)
                 ? current
                 : result.Models[0];
+            LocalLargeModelBox.Text = result.Models.Contains(currentLarge, StringComparer.OrdinalIgnoreCase)
+                ? currentLarge
+                : result.Models.FirstOrDefault(model => model.Contains("9b", StringComparison.OrdinalIgnoreCase)) ?? result.Models[0];
         }
     }
 
@@ -84,6 +90,7 @@ public partial class SettingsWindow : Window
         settings.AiMode = (AiMode)(ModeBox.SelectedItem ?? AiMode.Local);
         settings.LocalEndpoint = LocalEndpointBox.Text.TrimEnd('/');
         settings.LocalModel = LocalModelBox.Text.Trim();
+        settings.LocalLargeModel = LocalLargeModelBox.Text.Trim();
         settings.CloudModel = CloudModelBox.Text.Trim();
         settings.StartWithWindows = StartupBox.IsChecked == true;
         settings.CheckForUpdatesOnLaunch = UpdateCheckBox.IsChecked == true;
@@ -128,6 +135,7 @@ public partial class SettingsWindow : Window
         var localEnabled = mode is AiMode.Local or AiMode.Automatic;
         LocalEndpointBox.IsEnabled = localEnabled;
         LocalModelBox.IsEnabled = localEnabled;
+        LocalLargeModelBox.IsEnabled = localEnabled;
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => CloseWithResult(false);

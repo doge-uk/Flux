@@ -379,12 +379,22 @@ public partial class MainWindow : Window
 
     private async Task ExecuteProcessActionAsync(FluxAction action)
     {
+        var gracefulClose = action.Arguments?.GetValueOrDefault("verb") == "close";
+        if (action.Type != FluxActionType.RestartProcess)
+        {
+            var directResult = gracefulClose
+                ? await _processes.CloseApplicationAsync(action.Target)
+                : await _processes.TerminateApplicationAsync(action.Target);
+            ShowToolResults([directResult]);
+            return;
+        }
+
         var processes = await _processes.ListAsync();
         var match = processes
-            .Where(item => item.IsUserApplication || string.Equals(item.Name, action.Target, StringComparison.OrdinalIgnoreCase))
-            .Select(item => (Process: item, Score: FuzzyMatcher.Score(action.Target, item.Name)))
-            .Where(item => item.Score > 0)
-            .OrderByDescending(item => item.Score)
+            .Where(item => item.IsUserApplication &&
+                (string.Equals(item.Name, action.Target, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(item.FriendlyName, action.Target, StringComparison.OrdinalIgnoreCase)))
+            .Select(item => (Process: item, Score: 1))
             .FirstOrDefault();
 
         if (match.Process is null)
@@ -412,16 +422,13 @@ public partial class MainWindow : Window
             }
         }
 
-        var gracefulClose = action.Arguments?.GetValueOrDefault("verb") == "close";
-        var result = gracefulClose
-            ? await _processes.CloseAsync(match.Process.Id)
-            : await _processes.TerminateAsync(match.Process.Id);
+        var result = await _processes.TerminateAsync(match.Process.Id);
         if (result.Success && executable is not null)
         {
             Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
             result = result with { Output = result.Output + " Restarted it." };
         }
-        ShowStatus(result.Success ? "Action complete" : "Action failed", result.Output, result.Success ? "DONE" : "ERROR");
+        ShowToolResults([result]);
     }
 
     private async Task RunAgentAsync(string request)
@@ -429,23 +436,42 @@ public partial class MainWindow : Window
         ShowBusy("LOCAL AI");
         try
         {
+            var streamedText = new StringBuilder();
+            var streamStarted = false;
+            var progress = new Progress<string>(chunk =>
+            {
+                if (!streamStarted)
+                {
+                    streamStarted = true;
+                    ShowStatus("Flux", string.Empty, "LOCAL AI");
+                }
+                streamedText.Append(chunk);
+                StatusText.Text = NormalizeAiText(streamedText.ToString());
+            });
             var context = _results.Count == 0
                 ? "No deterministic search results were relevant."
                 : "Search candidates: " + string.Join("; ", _results.Take(5).Select(result => $"{result.Title} [{result.Subtitle}]"));
-            var result = await _agent.RunAsync(request, context);
+            var result = await _agent.RunAsync(request, context, progress);
             if (result.PendingActions.Count > 0)
             {
                 _pendingTools = result.PendingActions;
-                var details = string.Join(Environment.NewLine + Environment.NewLine, result.PendingActions.Select(pending =>
-                    $"{pending.Definition.Name} (permission {pending.Definition.Permission})\n{pending.Call.Arguments.GetRawText()}"));
+                var details = string.Join(Environment.NewLine, result.PendingActions.Select(pending => pending.ConfirmationText));
                 ShowConfirmation(
-                    string.IsNullOrWhiteSpace(result.Text) ? "Flux needs permission" : result.Text,
+                    "Confirm action",
                     details,
                     result.PendingActions.Max(item => item.Definition.Permission));
             }
+            else if (result.ExecutedTools.Any(IsActionResult))
+            {
+                ShowToolResults(result.ExecutedTools.Where(IsActionResult).ToArray());
+            }
             else
             {
-                ShowStatus("Result", string.IsNullOrWhiteSpace(result.Text) ? "Done." : result.Text, "LOCAL AI");
+                var finalText = NormalizeAiText(result.Text);
+                if (!streamStarted || !string.Equals(StatusText.Text, finalText, StringComparison.Ordinal))
+                {
+                    ShowStatus("Flux", string.IsNullOrWhiteSpace(finalText) ? "Done." : finalText, "LOCAL AI");
+                }
             }
         }
         catch (Exception exception)
@@ -485,11 +511,33 @@ public partial class MainWindow : Window
             }
         }
 
-        ShowStatus(
-            results.All(result => result.Success) ? "Actions complete" : "Some actions failed",
-            string.Join(Environment.NewLine, results.Select(result => result.Output)),
-            results.All(result => result.Success) ? "DONE" : "CHECK RESULT");
+        ShowToolResults(results);
     }
+
+    private bool IsActionResult(ToolResult result) =>
+        _tools.TryGet(result.Name, out var tool) && tool is not null &&
+        tool.Definition.Permission > PermissionLevel.ReadOnly;
+
+    private void ShowToolResults(IReadOnlyList<ToolResult> results)
+    {
+        if (results.Count == 0)
+        {
+            ShowStatus("No action was performed", string.Empty, "NOTHING CHANGED");
+            return;
+        }
+
+        var output = string.Join(Environment.NewLine, results.Select(result => result.Output).Where(value => !string.IsNullOrWhiteSpace(value)));
+        var lines = NormalizeAiText(output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var title = lines.FirstOrDefault() ?? (results.All(result => result.Success) ? "Done" : "Action failed");
+        var details = lines.Length > 1 ? string.Join(Environment.NewLine, lines.Skip(1)) : string.Empty;
+        ShowStatus(title, details, results.All(result => result.Success) ? "DONE" : "CHECK RESULT");
+    }
+
+    private static string NormalizeAiText(string text) =>
+        (text ?? string.Empty)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim();
 
     private void CancelConfirmation_Click(object sender, RoutedEventArgs e)
     {

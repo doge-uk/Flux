@@ -56,6 +56,11 @@ public sealed partial class DeterministicCommandRouter(
         {
             var verb = processAction.Groups["verb"].Value.ToLowerInvariant();
             var name = processAction.Groups["name"].Value.Trim();
+            if (CompoundProcessTargetsRegex().IsMatch(name))
+            {
+                return RouteDecision.Ai("This request targets multiple applications.");
+            }
+
             var type = verb == "restart" ? FluxActionType.RestartProcess : FluxActionType.TerminateProcess;
             return RouteDecision.Execute(
                 new FluxAction(type, name, PermissionLevel.Disruptive, $"{verb} {name}",
@@ -140,6 +145,9 @@ public sealed partial class DeterministicCommandRouter(
 
     [GeneratedRegex("^(?<verb>close|kill|terminate|restart)\\s+(?<name>.+)$", RegexOptions.IgnoreCase)]
     private static partial Regex ProcessActionRegex();
+
+    [GeneratedRegex("(?:,|\\s+(?:and|then)\\s+)", RegexOptions.IgnoreCase)]
+    private static partial Regex CompoundProcessTargetsRegex();
 
     [GeneratedRegex("(?:what(?:'s| is).*(?:ram|memory)|using (?:my )?(?:ram|memory)|memory usage)", RegexOptions.IgnoreCase)]
     private static partial Regex RamRegex();

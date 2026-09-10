@@ -53,7 +53,7 @@ public partial class App : System.Windows.Application
         var processes = new WindowsProcessService();
         var systemInfo = new WindowsSystemInfoService();
         var router = new DeterministicCommandRouter(applications, fileSearch);
-        var tools = new ToolRegistry(processes, systemInfo, fileSearch);
+        var tools = new ToolRegistry(processes, systemInfo, fileSearch, applications);
         _provider = new AiProviderRouter(settings);
         var agent = new FluxAgent(_provider, tools, log);
         var hotkey = new GlobalHotkeyManager();

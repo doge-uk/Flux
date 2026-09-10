@@ -24,15 +24,16 @@ The default global shortcut is `Alt + Space`. It can be changed in Settings.
 
 ## Local AI (default)
 
-Flux defaults to Ollama at `http://localhost:11434` and the `qwen3:8b` model. Install and start Ollama, then pull a tool-capable model:
+Flux defaults to Ollama at `http://localhost:11434` with `qwen3.5:2b` as its fast command model and `qwen3.5:9b` as its optional larger model. Install and start Ollama, then pull the models:
 
 ```powershell
-ollama pull qwen3:8b
+ollama pull qwen3.5:2b
+ollama pull qwen3.5:9b
 ```
 
 Open Flux Settings, select **Local**, choose the model, and use **Test local connection**. Flux does not silently fall back to the cloud in Local mode.
 
-The provider uses Ollama's OpenAI-compatible `/v1/chat/completions` endpoint and supports iterative tool calls. Any compatible local server can be used by changing the endpoint and model.
+The fast model handles ordinary commands and can privately route genuinely complex requests to the configured larger model. The provider uses Ollama's OpenAI-compatible `/v1/chat/completions` endpoint, streams normal text responses, and supports iterative tool calls. Any compatible local server can be used by changing the endpoint and models.
 
 Cloud mode is optional. It reads `OPENAI_API_KEY` from the environment; API keys are never written to Flux settings or this repository.
 

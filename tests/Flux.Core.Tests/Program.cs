@@ -15,7 +15,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Agent cannot auto-run disruptive tool", TestAgentSafetyGate),
     ("Release tags accept a leading v", TestReleaseTagParsing),
     ("Release comparison normalizes assembly revisions", TestReleaseComparison),
-    ("Malformed release tags are rejected", TestMalformedReleaseTag)
+    ("Malformed release tags are rejected", TestMalformedReleaseTag),
+    ("Compound process actions route to AI tools", TestCompoundProcessAction),
+    ("Agent rejects unverified action claims", TestUnverifiedActionClaim),
+    ("Agent streams text but buffers action requests", TestStreamingSafety)
 };
 
 var failures = new List<string>();
@@ -111,6 +114,38 @@ static Task TestMalformedReleaseTag()
     return Task.CompletedTask;
 }
 
+static async Task TestCompoundProcessAction()
+{
+    var compound = await Router().RouteAsync("close Discord and Chrome");
+    Assert(compound.Kind == RouteKind.Ai, "A compound close must not be treated as one application name.");
+
+    var single = await Router().RouteAsync("close Discord");
+    Assert(single.Kind == RouteKind.ImmediateAction, "A single close should stay deterministic.");
+    Assert(single.Action?.Target == "Discord", "The single application target was parsed incorrectly.");
+}
+
+static async Task TestUnverifiedActionClaim()
+{
+    var registry = new FakeRegistry(new CountingTool(PermissionLevel.Disruptive));
+    var agent = new FluxAgent(new TextOnlyProvider("Closed: Discord"), registry, new FakeLog());
+    var result = await agent.RunAsync("close Discord", "Discord is running");
+    Assert(result.Text == "No action was performed.", "The agent exposed an unverified success claim.");
+}
+
+static async Task TestStreamingSafety()
+{
+    var registry = new FakeRegistry(new CountingTool(PermissionLevel.Disruptive));
+    var provider = new StreamingProvider();
+    var agent = new FluxAgent(provider, registry, new FakeLog());
+    var chunks = new List<string>();
+    await agent.RunAsync("explain uptime", "none", new InlineProgress<string>(chunks.Add));
+    Assert(chunks.SequenceEqual(["hello", " world"]), "Normal AI text did not stream through the agent.");
+
+    chunks.Clear();
+    await agent.RunAsync("could you close Discord", "Discord is running", new InlineProgress<string>(chunks.Add));
+    Assert(chunks.Count == 0, "An action response streamed before tool verification.");
+}
+
 static DeterministicCommandRouter Router() => new(new FakeApplications(), new FakeFiles());
 
 static void Assert(bool condition, string message)
@@ -142,6 +177,37 @@ sealed class FakeProvider : IAiProvider
         using var document = JsonDocument.Parse("{\"pid\":42}");
         return Task.FromResult(new AiTurnResponse("response", "", [new ToolCall("call", "test_tool", document.RootElement.Clone())]));
     }
+}
+
+sealed class TextOnlyProvider(string text) : IAiProvider
+{
+    public string Name => "text-only";
+    public bool IsConfigured => true;
+    public Task<AiTurnResponse> CompleteAsync(AiTurnRequest request, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AiTurnResponse("response", text, Array.Empty<ToolCall>()));
+}
+
+sealed class StreamingProvider : IStreamingAiProvider
+{
+    public string Name => "streaming";
+    public bool IsConfigured => true;
+    public Task<AiTurnResponse> CompleteAsync(AiTurnRequest request, CancellationToken cancellationToken = default) =>
+        Task.FromResult(new AiTurnResponse("response", "Unverified action claim", Array.Empty<ToolCall>()));
+
+    public Task<AiTurnResponse> CompleteStreamingAsync(
+        AiTurnRequest request,
+        IProgress<string> textProgress,
+        CancellationToken cancellationToken = default)
+    {
+        textProgress.Report("hello");
+        textProgress.Report(" world");
+        return Task.FromResult(new AiTurnResponse("response", "hello world", Array.Empty<ToolCall>()));
+    }
+}
+
+sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+{
+    public void Report(T value) => report(value);
 }
 
 sealed class CountingTool(PermissionLevel permission) : IFluxTool

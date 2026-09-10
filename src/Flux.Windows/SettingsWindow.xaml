@@ -250,8 +250,13 @@
                                 <TextBlock Text="Local endpoint" Foreground="#BEC3CC" />
                                 <TextBox x:Name="LocalEndpointBox" />
 
-                                <TextBlock Text="Local model" Foreground="#BEC3CC" />
+                                <TextBlock Text="Fast local model" Foreground="#BEC3CC" />
                                 <ComboBox x:Name="LocalModelBox" IsEditable="True" />
+
+                                <TextBlock Text="Larger local model" Foreground="#BEC3CC" />
+                                <ComboBox x:Name="LocalLargeModelBox" IsEditable="True" />
+                                <TextBlock Text="The fast model can hand complex requests to this model."
+                                           Foreground="#777E8C" FontSize="12" TextWrapping="Wrap" Margin="0,-7,0,4" />
 
                                 <StackPanel Orientation="Horizontal">
                                     <Button Content="Test local connection" Click="TestLocal_Click" />

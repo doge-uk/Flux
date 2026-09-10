@@ -7,6 +7,7 @@ public sealed class FluxAgent(IAiProvider provider, IToolRegistry tools, ILogSer
     public async Task<AiAgentResult> RunAsync(
         string request,
         string relevantContext,
+        IProgress<string>? textProgress = null,
         CancellationToken cancellationToken = default)
     {
         if (!provider.IsConfigured)
@@ -25,12 +26,15 @@ public sealed class FluxAgent(IAiProvider provider, IToolRegistry tools, ILogSer
 
         for (var turn = 0; turn < MaxTurns; turn++)
         {
-            var response = await provider.CompleteAsync(new AiTurnRequest(
+            var turnRequest = new AiTurnRequest(
                 request,
                 relevantContext,
                 tools.Definitions,
                 previousResponseId,
-                toolResults), cancellationToken);
+                toolResults);
+            var response = textProgress is not null && !LooksLikeActionRequest(request) && provider is IStreamingAiProvider streaming
+                ? await streaming.CompleteStreamingAsync(turnRequest, textProgress, cancellationToken)
+                : await provider.CompleteAsync(turnRequest, cancellationToken);
 
             previousResponseId = response.ResponseId;
             finalText = response.Text;
@@ -45,7 +49,9 @@ public sealed class FluxAgent(IAiProvider provider, IToolRegistry tools, ILogSer
             {
                 if (!tools.TryGet(call.Name, out var tool) || tool is null)
                 {
-                    automaticResults.Add(new ToolResult(call.Id, call.Name, false, "Flux refused an unknown tool."));
+                    var unknownResult = new ToolResult(call.Id, call.Name, false, "No action was performed.");
+                    automaticResults.Add(unknownResult);
+                    executed.Add(unknownResult);
                     continue;
                 }
 
@@ -67,7 +73,9 @@ public sealed class FluxAgent(IAiProvider provider, IToolRegistry tools, ILogSer
                 catch (Exception exception)
                 {
                     log.Error($"Tool {call.Name} failed.", exception);
-                    automaticResults.Add(new ToolResult(call.Id, call.Name, false, exception.Message));
+                    var failedResult = new ToolResult(call.Id, call.Name, false, "The action could not be completed.");
+                    automaticResults.Add(failedResult);
+                    executed.Add(failedResult);
                 }
             }
 
@@ -82,7 +90,24 @@ public sealed class FluxAgent(IAiProvider provider, IToolRegistry tools, ILogSer
             toolResults = automaticResults;
         }
 
+        if (pending.Count == 0 && LooksLikeActionRequest(request) &&
+            !executed.Any(result => result.Success && IsActionTool(result.Name)))
+        {
+            finalText = executed.FirstOrDefault(result => IsActionTool(result.Name))?.Output
+                ?? "No action was performed.";
+        }
+
         return new AiAgentResult(finalText, pending, executed);
     }
-}
 
+    private bool IsActionTool(string toolName) =>
+        tools.TryGet(toolName, out var tool) && tool is not null && tool.Definition.Permission > PermissionLevel.ReadOnly;
+
+    private static bool LooksLikeActionRequest(string request)
+    {
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            request,
+            "^\\s*(?:please\\s+)?(?:(?:can|could|would|will)\\s+you\\s+)?(?:open|launch|start|run|close|kill|terminate|restart|create|make)\\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+}

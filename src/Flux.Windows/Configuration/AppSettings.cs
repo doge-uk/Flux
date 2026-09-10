@@ -12,7 +12,8 @@ public sealed class AppSettings
 {
     public AiMode AiMode { get; set; } = AiMode.Local;
     public string LocalEndpoint { get; set; } = "http://localhost:11434";
-    public string LocalModel { get; set; } = "qwen3:8b";
+    public string LocalModel { get; set; } = "qwen3.5:2b";
+    public string LocalLargeModel { get; set; } = "qwen3.5:9b";
     public string CloudEndpoint { get; set; } = "https://api.openai.com/v1";
     public string CloudModel { get; set; } = "gpt-5.6-luna";
     public bool StartWithWindows { get; set; }

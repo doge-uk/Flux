@@ -12,15 +12,18 @@ public sealed class ToolRegistry : IToolRegistry
     public ToolRegistry(
         IProcessService processes,
         ISystemInfoService system,
-        IFileSearchService files)
+        IFileSearchService files,
+        IApplicationCatalog applications)
     {
         IFluxTool[] all =
         [
             new ListProcessesTool(processes),
             new SystemStatsTool(system),
-            new TerminateProcessTool(processes),
+            new TerminateApplicationTool(processes),
             new CloseApplicationTool(processes),
-            new LaunchApplicationTool(),
+            new CloseApplicationsTool(processes),
+            new CloseApplicationsExceptTool(processes),
+            new LaunchApplicationTool(applications),
             new OpenPathTool(),
             new SearchFilesTool(files),
             new CreateFolderTool(),
@@ -61,6 +64,64 @@ public sealed class ToolRegistry : IToolRegistry
         };
     }
 
+    private static JsonObject StringArraySchema(string name, string description) => new()
+    {
+        ["type"] = "object",
+        ["properties"] = new JsonObject
+        {
+            [name] = new JsonObject
+            {
+                ["type"] = "array",
+                ["description"] = description,
+                ["items"] = new JsonObject { ["type"] = "string" }
+            }
+        },
+        ["required"] = new JsonArray(name),
+        ["additionalProperties"] = false
+    };
+
+    private static string ReadRequiredString(ToolCall call, string propertyName)
+    {
+        if (!call.Arguments.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(value.GetString()))
+        {
+            throw new InvalidOperationException($"Tool argument '{propertyName}' is required.");
+        }
+
+        return value.GetString()!.Trim();
+    }
+
+    private static IReadOnlyList<string> ReadStringArray(ToolCall call, string propertyName)
+    {
+        if (!call.Arguments.TryGetProperty(propertyName, out var value))
+        {
+            throw new InvalidOperationException($"Tool argument '{propertyName}' is required.");
+        }
+
+        IEnumerable<string?> values = value.ValueKind switch
+        {
+            JsonValueKind.Array => value.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()),
+            JsonValueKind.String => (value.GetString() ?? string.Empty)
+                .Replace(" and ", ",", StringComparison.OrdinalIgnoreCase)
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            _ => Array.Empty<string>()
+        };
+
+        var result = values
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (result.Length == 0 && propertyName != "exclusions")
+        {
+            throw new InvalidOperationException($"Tool argument '{propertyName}' must contain at least one application name.");
+        }
+
+        return result;
+    }
+
     private sealed class ListProcessesTool(IProcessService processes) : IFluxTool
     {
         public ToolDefinition Definition { get; } = new(
@@ -75,6 +136,7 @@ public sealed class ToolRegistry : IToolRegistry
             {
                 pid = item.Id,
                 name = item.Name,
+                display_name = item.FriendlyName,
                 window = item.WindowTitle,
                 memory_mb = Math.Round(item.WorkingSetBytes / 1024d / 1024d, 1),
                 cpu_percent = Math.Round(item.CpuPercent, 1),
@@ -100,48 +162,112 @@ public sealed class ToolRegistry : IToolRegistry
         }
     }
 
-    private sealed class TerminateProcessTool(IProcessService processes) : IFluxTool
+    private sealed class TerminateApplicationTool(IProcessService processes) : IFluxTool
     {
         public ToolDefinition Definition { get; } = new(
-            "terminate_process",
-            "Force-terminate one non-protected process by PID. Unsaved work may be lost.",
-            Schema(("pid", "integer", "Exact process ID from list_processes", true)),
+            "terminate_application",
+            "Force-terminate one visible, non-protected user application after Flux resolves a unique live application identity.",
+            Schema(("name", "string", "Application name exactly as the user said it", true)),
             PermissionLevel.Disruptive);
 
-        public Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default) =>
-            processes.TerminateAsync(call.Arguments.GetProperty("pid").GetInt32(), cancellationToken);
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
+        {
+            var name = ReadRequiredString(call, "name");
+            var result = await processes.TerminateApplicationAsync(name, cancellationToken);
+            return result with { CallId = call.Id, Name = Definition.Name };
+        }
     }
 
     private sealed class CloseApplicationTool(IProcessService processes) : IFluxTool
     {
         public ToolDefinition Definition { get; } = new(
             "close_application",
-            "Ask one non-protected desktop application to close cleanly by PID.",
-            Schema(("pid", "integer", "Exact process ID from list_processes", true)),
+            "Close one visible user application by unique live identity. Flux verifies exit and force-closes the exact process tree only if the app ignores a clean close.",
+            Schema(("name", "string", "Application name exactly as the user said it", true)),
             PermissionLevel.Disruptive);
 
-        public Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default) =>
-            processes.CloseAsync(call.Arguments.GetProperty("pid").GetInt32(), cancellationToken);
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
+        {
+            var name = ReadRequiredString(call, "name");
+            var result = await processes.CloseApplicationAsync(name, cancellationToken);
+            return result with { CallId = call.Id, Name = Definition.Name };
+        }
     }
 
-    private sealed class LaunchApplicationTool : IFluxTool
+    private sealed class CloseApplicationsTool(IProcessService processes) : IFluxTool
+    {
+        public ToolDefinition Definition { get; } = new(
+            "close_applications",
+            "Close several specifically named visible user applications. Use this for requests such as 'close Discord and Chrome'.",
+            StringArraySchema("names", "Exact application names from the user's request"),
+            PermissionLevel.Disruptive);
+
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
+        {
+            var names = ReadStringArray(call, "names");
+            var result = await processes.CloseApplicationsAsync(names, cancellationToken);
+            return result with { CallId = call.Id, Name = Definition.Name };
+        }
+    }
+
+    private sealed class CloseApplicationsExceptTool(IProcessService processes) : IFluxTool
+    {
+        public ToolDefinition Definition { get; } = new(
+            "close_applications_except",
+            "Close every eligible visible user application except the named applications. Flux discovers live applications, preserves protected Windows processes, and verifies every close.",
+            StringArraySchema("exclusions", "Application names that must remain open"),
+            PermissionLevel.Disruptive);
+
+        public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
+        {
+            var exclusions = ReadStringArray(call, "exclusions");
+            var result = await processes.CloseAllExceptAsync(exclusions, cancellationToken);
+            return result with { CallId = call.Id, Name = Definition.Name };
+        }
+    }
+
+    private sealed class LaunchApplicationTool(IApplicationCatalog applications) : IFluxTool
     {
         public ToolDefinition Definition { get; } = new(
             "launch_application",
-            "Launch an application at an exact path already found by Flux.",
-            Schema(("path", "string", "Full executable or shortcut path", true)),
+            "Open an installed application by name after Flux resolves it against the indexed application catalog.",
+            Schema(("name", "string", "Installed application name exactly as the user said it", true)),
             PermissionLevel.Reversible);
 
         public Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken cancellationToken = default)
         {
-            var path = call.Arguments.GetProperty("path").GetString() ?? string.Empty;
-            if (!File.Exists(path))
+            var name = ReadRequiredString(call, "name");
+            var matches = applications.Search(name, 5)
+                .Where(result => result.Kind == SearchResultKind.Application)
+                .ToArray();
+            var exact = matches.Where(result =>
+                string.Equals(result.Title, name, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var match = exact.Length == 1
+                ? exact[0]
+                : matches.Length > 0 && matches[0].Score >= 620 &&
+                    (matches.Length == 1 || matches[0].Score - matches[1].Score >= 80)
+                    ? matches[0]
+                    : null;
+            if (match is null || !File.Exists(match.Action.Target))
             {
-                return Task.FromResult(new ToolResult(call.Id, Definition.Name, false, "Application path does not exist."));
+                return Task.FromResult(new ToolResult(call.Id, Definition.Name, false, $"Couldn't open: {name}"));
             }
 
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-            return Task.FromResult(new ToolResult(call.Id, Definition.Name, true, $"Launched {Path.GetFileNameWithoutExtension(path)}."));
+            try
+            {
+                var process = Process.Start(new ProcessStartInfo(match.Action.Target) { UseShellExecute = true });
+                if (process is null)
+                {
+                    return Task.FromResult(new ToolResult(call.Id, Definition.Name, false, $"Couldn't open: {match.Title}"));
+                }
+
+                process.Dispose();
+                return Task.FromResult(new ToolResult(call.Id, Definition.Name, true, $"Opened: {match.Title}"));
+            }
+            catch
+            {
+                return Task.FromResult(new ToolResult(call.Id, Definition.Name, false, $"Couldn't open: {match.Title}"));
+            }
         }
     }
 

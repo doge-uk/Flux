@@ -82,7 +82,12 @@ public sealed record ProcessSnapshot(
     double CpuPercent,
     bool Responding,
     bool IsUserApplication,
-    bool IsProtected);
+    bool IsProtected,
+    string? ExecutablePath = null,
+    string? DisplayName = null)
+{
+    public string FriendlyName => string.IsNullOrWhiteSpace(DisplayName) ? Name : DisplayName;
+}
 
 public sealed record SystemSnapshot(
     double CpuPercent,
@@ -123,4 +128,3 @@ public sealed record AiAgentResult(
     string Text,
     IReadOnlyList<PendingToolCall> PendingActions,
     IReadOnlyList<ToolResult> ExecutedTools);
-
