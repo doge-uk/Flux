@@ -18,6 +18,7 @@ TestMalformedToolCallParsing();
 TestMarkdownRendering();
 TestEndpointValidation();
 TestSystemInstructions();
+TestBackgroundProcessToolContract();
 await TestFileSearchBudgetAsync();
 await TestPowerShellExecutionSafetyAsync();
 
@@ -142,6 +143,27 @@ static void TestSystemInstructions()
     Assert(instructions.Contains("do not claim the action succeeded", StringComparison.OrdinalIgnoreCase),
         "The system prompt no longer prevents unverified success claims.");
     Console.WriteLine("PASS  AI response instructions are concise and internally consistent");
+}
+
+static void TestBackgroundProcessToolContract()
+{
+    var registry = new ToolRegistry(
+        new WindowsProcessService([]),
+        new WindowsSystemInfoService(),
+        new FileSearchService(),
+        new ApplicationCatalog(new AppSettings(), new SilentLog()));
+    var closeTools = registry.Definitions.Where(definition =>
+        definition.Name is "terminate_application" or "close_application" or
+            "close_applications" or "close_applications_except").ToArray();
+
+    Assert(closeTools.Length == 4, "One or more application-close tools are missing.");
+    Assert(closeTools.All(definition => definition.Description.Contains("background", StringComparison.OrdinalIgnoreCase)),
+        "An application-close tool still tells the model it cannot resolve background applications.");
+    Assert(CompatibleChatProvider.SystemInstructions.Contains("BackgroundApplication", StringComparison.Ordinal),
+        "The system prompt does not explain safe background application selection.");
+    Assert(CompatibleChatProvider.SystemInstructions.Contains("HelperProcess", StringComparison.Ordinal),
+        "The system prompt does not prevent helpers from being selected independently.");
+    Console.WriteLine("PASS  AI tools advertise safe background application shutdown");
 }
 
 static async Task TestLocalModelProtocolAsync(string model)
@@ -456,4 +478,15 @@ static void Assert(bool condition, string message)
 sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
 {
     public void Report(T value) => report(value);
+}
+
+sealed class SilentLog : ILogService
+{
+    public void Info(string message)
+    {
+    }
+
+    public void Error(string message, Exception? exception = null)
+    {
+    }
 }

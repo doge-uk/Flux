@@ -168,7 +168,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         public ToolDefinition Definition { get; } = new(
             "terminate_application",
-            "Force-terminate one visible, non-protected user application after Flux resolves a unique live application identity.",
+            "Force-terminate one non-protected user application, including its background app-family processes, after Flux resolves a unique live application identity.",
             Schema(("name", "string", "Application name exactly as the user said it", true)),
             PermissionLevel.Disruptive);
 
@@ -184,7 +184,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         public ToolDefinition Definition { get; } = new(
             "close_application",
-            "Close one visible user application by unique live identity. The name File Explorer safely closes folder windows without terminating the Windows shell. Flux verifies application exit and force-closes the exact process tree only if the app ignores a clean close.",
+            "Close one user application by unique live identity, including its tray or background app-family processes. The name File Explorer safely closes folder windows without terminating the Windows shell. Flux verifies application exit and force-closes the exact resolved family only if the app ignores a clean close.",
             Schema(("name", "string", "Application name exactly as the user said it", true)),
             PermissionLevel.Disruptive);
 
@@ -200,7 +200,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         public ToolDefinition Definition { get; } = new(
             "close_applications",
-            "Close several specifically named visible user applications. Use this for requests such as 'close Discord and Chrome'. File Explorer safely closes folder windows without terminating the Windows shell.",
+            "Close several specifically named user applications, including their tray or background app-family processes. Use this for requests such as 'close Discord and Chrome'. File Explorer safely closes folder windows without terminating the Windows shell.",
             StringArraySchema("names", "Exact application names from the user's request"),
             PermissionLevel.Disruptive);
 
@@ -216,7 +216,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         public ToolDefinition Definition { get; } = new(
             "close_applications_except",
-            "Close every eligible visible user application except the named applications. Flux discovers live applications, preserves protected Windows processes, and verifies every close.",
+            "Close every eligible user application, including background applications, except the named applications. Flux discovers live app identities, preserves Windows processes and services, and verifies every close.",
             StringArraySchema("exclusions", "Application names that must remain open"),
             PermissionLevel.Disruptive);
 
