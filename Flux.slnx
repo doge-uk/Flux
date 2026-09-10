@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/Flux.Core/Flux.Core.csproj" />
+  <Project Path="src/Flux.Windows/Flux.Windows.csproj" />
+  <Project Path="tests/Flux.Core.Tests/Flux.Core.Tests.csproj" />
+</Solution>
+

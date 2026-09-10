@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>Flux.Windows</RootNamespace>
+    <AssemblyName>Flux</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('Assets\Flux.ico')">Assets\Flux.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(FluxUpdateRepository)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>FluxUpdateRepository</_Parameter1>
+      <_Parameter2>$(FluxUpdateRepository)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Flux.Core\Flux.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Assets\FluxMark.png" Condition="Exists('Assets\FluxMark.png')" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\LICENSE')" />
+  </ItemGroup>
+</Project>
