@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _searchTimer;
     private readonly DispatcherTimer _particleCleanupTimer;
     private CancellationTokenSource? _searchCancellation;
+    private CancellationTokenSource? _agentCancellation;
     private FluxAction? _pendingAction;
     private IReadOnlyList<PendingToolCall> _pendingTools = Array.Empty<PendingToolCall>();
     private int _historyIndex = -1;
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
     private bool _settingsOpen;
     private bool _isHiding;
     private int _animationGeneration;
+    private int _agentGeneration;
     private string _aiModeLabel = "LOCAL AI";
     private string? _resolvedQuery;
 
@@ -112,6 +114,7 @@ public partial class MainWindow : Window
 
     public void ShowLauncher()
     {
+        CancelTransientWork();
         _animationGeneration++;
         _isHiding = false;
         InitializeHotkey();
@@ -174,6 +177,7 @@ public partial class MainWindow : Window
 
     public void AllowClose()
     {
+        CancelTransientWork();
         _aiProvider.ModelStatusChanged -= AiProvider_ModelStatusChanged;
         _hotkey.Dispose();
         Close();
@@ -580,6 +584,11 @@ public partial class MainWindow : Window
 
     private async Task RunAgentAsync(string request)
     {
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = _agentCancellation;
+        _agentCancellation = cancellation;
+        previousCancellation?.Cancel();
+        var generation = ++_agentGeneration;
         ShowBusy(_aiModeLabel);
         BusyText.Text = "Working locally…";
         try
@@ -588,6 +597,10 @@ public partial class MainWindow : Window
             var streamStarted = false;
             var progress = new Progress<string>(chunk =>
             {
+                if (!IsCurrentAgentRequest(cancellation, generation))
+                {
+                    return;
+                }
                 if (!streamStarted)
                 {
                     streamStarted = true;
@@ -599,7 +612,11 @@ public partial class MainWindow : Window
             var context = _results.Count == 0
                 ? "No deterministic search results were relevant."
                 : "Search candidates: " + string.Join("; ", _results.Take(5).Select(result => $"{result.Title} [{result.Subtitle}]"));
-            var result = await _agent.RunAsync(request, context, progress);
+            var result = await _agent.RunAsync(request, context, progress, cancellation.Token);
+            if (!IsCurrentAgentRequest(cancellation, generation))
+            {
+                return;
+            }
             if (result.PendingActions.Count > 0)
             {
                 if (!_settings.ConfirmBeforeClosingApplications && result.PendingActions.All(IsApplicationCloseTool))
@@ -629,12 +646,32 @@ public partial class MainWindow : Window
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
         catch (Exception exception)
         {
-            _log.Error("AI request failed.", exception);
-            ShowStatus("Local model unavailable", exception.Message + "\n\nOpen Settings to test the endpoint and choose an installed model.", "LOCAL AI");
+            if (IsCurrentAgentRequest(cancellation, generation))
+            {
+                _log.Error("AI request failed.", exception);
+                ShowStatus("Local model unavailable", exception.Message + "\n\nOpen Settings to test the endpoint and choose an installed model.", "LOCAL AI");
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_agentCancellation, cancellation))
+            {
+                _agentCancellation = null;
+            }
+            cancellation.Dispose();
         }
     }
+
+    private bool IsCurrentAgentRequest(CancellationTokenSource cancellation, int generation) =>
+        ReferenceEquals(_agentCancellation, cancellation) &&
+        generation == _agentGeneration &&
+        !cancellation.IsCancellationRequested &&
+        IsVisible && !_isHiding;
 
     private async void Confirm_Click(object sender, RoutedEventArgs e)
     {
@@ -951,6 +988,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        CancelTransientWork();
         _isHiding = true;
         var generation = ++_animationGeneration;
         if (!SystemParameters.ClientAreaAnimation)
@@ -1055,6 +1093,15 @@ public partial class MainWindow : Window
         {
             HideLauncher();
         }
+    }
+
+    private void CancelTransientWork()
+    {
+        _searchTimer.Stop();
+        _searchCancellation?.Cancel();
+        _resolvedQuery = null;
+        _agentGeneration++;
+        _agentCancellation?.Cancel();
     }
 
 }
