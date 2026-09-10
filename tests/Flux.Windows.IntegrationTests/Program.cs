@@ -21,6 +21,7 @@ TestSystemInstructions();
 TestBackgroundProcessToolContract();
 await TestFileSearchBudgetAsync();
 await TestPowerShellExecutionSafetyAsync();
+await TestBackgroundOnlyApplicationCloseAsync();
 
 if (args.Contains("--warmup-only", StringComparer.OrdinalIgnoreCase))
 {
@@ -131,6 +132,55 @@ static async Task TestPowerShellExecutionSafetyAsync()
     Assert(stopwatch.Elapsed < TimeSpan.FromSeconds(4),
         "Cancelling PowerShell did not promptly terminate its process tree.");
     Console.WriteLine("PASS  PowerShell execution is cancellable and output-bounded");
+}
+
+static async Task TestBackgroundOnlyApplicationCloseAsync()
+{
+    var fixtureDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        $"FluxBackgroundFixture-{Guid.NewGuid():N}");
+    var fixtureExecutable = Path.Combine(fixtureDirectory, "FluxBackgroundFixture.exe");
+    Directory.CreateDirectory(fixtureDirectory);
+    File.Copy(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "ping.exe"),
+        fixtureExecutable);
+
+    Process? fixture = null;
+    try
+    {
+        var startInfo = new ProcessStartInfo(fixtureExecutable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("127.0.0.1");
+        startInfo.ArgumentList.Add("-t");
+        fixture = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the background-only process fixture.");
+        await Task.Delay(150);
+
+        var service = new WindowsProcessService([fixture.Id]);
+        var snapshot = (await service.ListAsync()).Single(item => item.Id == fixture.Id);
+        Assert(snapshot.Category == ProcessCategory.BackgroundApplication && !snapshot.HasVisibleWindow,
+            "A background-only installed application was not classified as eligible.");
+
+        var result = await service.CloseApplicationAsync("FluxBackgroundFixture");
+        Assert(result.Success, result.Output);
+        Assert(await WaitForGoneAsync(fixture.Id),
+            "A background-only application was reported closed but is still running.");
+        Console.WriteLine("PASS  Background-only applications resolve and fully close");
+    }
+    finally
+    {
+        if (fixture is not null)
+        {
+            KillIfRunning(fixture);
+        }
+        if (Directory.Exists(fixtureDirectory))
+        {
+            Directory.Delete(fixtureDirectory, recursive: true);
+        }
+    }
 }
 
 static void TestSystemInstructions()
