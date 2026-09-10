@@ -17,6 +17,7 @@ TestProcessClassification();
 TestMalformedToolCallParsing();
 TestMarkdownRendering();
 TestEndpointValidation();
+TestSystemInstructions();
 await TestFileSearchBudgetAsync();
 await TestPowerShellExecutionSafetyAsync();
 
@@ -129,6 +130,18 @@ static async Task TestPowerShellExecutionSafetyAsync()
     Assert(stopwatch.Elapsed < TimeSpan.FromSeconds(4),
         "Cancelling PowerShell did not promptly terminate its process tree.");
     Console.WriteLine("PASS  PowerShell execution is cancellable and output-bounded");
+}
+
+static void TestSystemInstructions()
+{
+    var instructions = CompatibleChatProvider.SystemInstructions;
+    Assert(instructions.Contains("Use lightweight Markdown", StringComparison.Ordinal),
+        "The model was not told which response formatting Flux supports.");
+    Assert(!instructions.Contains("DO NOT USE ANY TYPE OF FORMATTING", StringComparison.OrdinalIgnoreCase),
+        "The system prompt contains contradictory formatting instructions.");
+    Assert(instructions.Contains("do not claim the action succeeded", StringComparison.OrdinalIgnoreCase),
+        "The system prompt no longer prevents unverified success claims.");
+    Console.WriteLine("PASS  AI response instructions are concise and internally consistent");
 }
 
 static async Task TestLocalModelProtocolAsync(string model)
