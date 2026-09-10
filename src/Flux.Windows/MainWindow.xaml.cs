@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private int _historyIndex = -1;
     private bool _hotkeyInitialized;
     private bool _settingsOpen;
+    private SettingsWindow? _settingsWindow;
     private bool _isHiding;
     private int _animationGeneration;
     private int _agentGeneration;
@@ -154,11 +155,22 @@ public partial class MainWindow : Window
 
     public void ShowSettings()
     {
+        if (_settingsWindow is not null)
+        {
+            if (_settingsWindow.WindowState == WindowState.Minimized)
+            {
+                _settingsWindow.WindowState = WindowState.Normal;
+            }
+            _settingsWindow.Activate();
+            return;
+        }
+
         _settingsOpen = true;
         var window = new SettingsWindow(_settingsService, _startup, _history)
         {
             Owner = IsVisible ? this : null
         };
+        _settingsWindow = window;
         bool saved;
         try
         {
@@ -166,6 +178,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _settingsWindow = null;
             _settingsOpen = false;
         }
         if (saved)
